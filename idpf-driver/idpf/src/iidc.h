@@ -163,6 +163,18 @@ struct iidc_vf_port_info {
 	u16 port_vlan_tpid;
 };
 
+struct iidc_notifier_block {
+	/* This event_handler is meant to be a blocking call.  For instance,
+	 * when a BEFORE_MTU_CHANGE event comes in, the event_handler will not
+	 * return until the auxiliary driver is ready for the MTU change to
+	 * happen.
+	 */
+	void (*event_handler)(struct iidc_core_dev_info *cdev_info,
+			      struct iidc_event *event);
+	int (*vc_receive)(struct iidc_core_dev_info *cdev_info, u32 vf_id,
+			  u8 *msg, u16 len);
+};
+
 /* Following APIs are implemented by core PCI driver */
 struct iidc_core_ops {
 	/* APIs to allocate resources such as VEB, VSI, Doorbell queues,
@@ -192,6 +204,9 @@ struct iidc_core_ops {
 			       struct iidc_rdma_multi_qset_params *qset);
 	int (*free_multi_res)(struct iidc_core_dev_info *cdev_info,
 			      struct iidc_rdma_multi_qset_params *qset);
+	int (*register_notifier)(struct iidc_core_dev_info *cdev_info,
+				 const struct iidc_notifier_block *nb);
+	int (*unregister_notifier)(struct iidc_core_dev_info *cdev_info);
 };
 
 #define IIDC_RDMA_ROCE_NAME	"roce"
@@ -254,6 +269,11 @@ struct iidc_core_dev_info {
 	 * by core PCI driver and called by auxiliary driver
 	 */
 	const struct iidc_core_ops *ops;
+	/* The aux bus driver can subscribe to events and VC responses
+	 * from the core PCI driver. This lock protects the registration.
+	 */
+	struct mutex iidc_notifier_lock;
+	struct iidc_notifier_block notifiers;
 	u8 pf_id;
 	u8 main_pf_port;
 	u8 rdma_active_port;
@@ -277,15 +297,6 @@ struct iidc_auxiliary_dev {
  */
 struct iidc_auxiliary_drv {
 	struct auxiliary_driver adrv;
-	/* This event_handler is meant to be a blocking call.  For instance,
-	 * when a BEFORE_MTU_CHANGE event comes in, the event_handler will not
-	 * return until the auxiliary driver is ready for the MTU change to
-	 * happen.
-	 */
-	void (*event_handler)(struct iidc_core_dev_info *cdev_info,
-			      struct iidc_event *event);
-	int (*vc_receive)(struct iidc_core_dev_info *cdev_info, u32 vf_id,
-			  u8 *msg, u16 len);
 };
 
 #endif /* _IIDC_H_*/
