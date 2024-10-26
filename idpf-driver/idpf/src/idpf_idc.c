@@ -37,29 +37,6 @@ void idpf_idc_deinit(struct idpf_adapter *adapter)
 }
 
 /**
- * idpf_get_auxiliary_drv - retrieve iidc_auxiliary_drv structure
- * @cdev_info: pointer to iidc_core_dev_info struct
- *
- * This function has to be called with a device_lock on the
- * cdev_info->adev.dev to avoid race conditions.
- */
-static struct iidc_auxiliary_drv *
-idpf_get_auxiliary_drv(struct iidc_core_dev_info *cdev_info)
-{
-	struct auxiliary_device *adev;
-
-	if (!cdev_info)
-		return NULL;
-
-	adev = cdev_info->adev;
-	if (!adev || !adev->dev.driver)
-		return NULL;
-
-	return container_of(adev->dev.driver, struct iidc_auxiliary_drv,
-			    adrv.driver);
-}
-
-/**
  * idpf_idc_event - Function to handle IDC event
  * @rdma_data: pointer to rdma data struct
  * @reason: event reason
@@ -70,7 +47,6 @@ void idpf_idc_event(struct idpf_rdma_data *rdma_data,
 		    bool pre_event)
 {
 	struct iidc_core_dev_info *cdev_info = rdma_data->cdev_info;
-	struct iidc_auxiliary_drv *iadrv;
 	enum iidc_event_type event_type;
 	struct iidc_event *event;
 
@@ -98,11 +74,11 @@ void idpf_idc_event(struct idpf_rdma_data *rdma_data,
 		return;
 	set_bit(event_type, event->type);
 
-	device_lock(&cdev_info->adev->dev);
-	iadrv = idpf_get_auxiliary_drv(cdev_info);
-	if (iadrv && iadrv->event_handler)
-		iadrv->event_handler(cdev_info, event);
-	device_unlock(&cdev_info->adev->dev);
+	mutex_lock(&cdev_info->iidc_notifier_lock);
+	if (cdev_info->notifiers.event_handler)
+		cdev_info->notifiers.event_handler(cdev_info, event);
+	mutex_unlock(&cdev_info->iidc_notifier_lock);
+
 	kfree(event);
 }
 
@@ -120,7 +96,6 @@ int idpf_idc_vc_receive(struct idpf_rdma_data *rdma_data, u32 f_id, const u8 *ms
 			u16 msg_size)
 {
 	struct iidc_core_dev_info *cdev_info;
-	struct iidc_auxiliary_drv *iadrv;
 	int err = 0;
 
 	if (!rdma_data->cdev_info || !rdma_data->cdev_info->adev)
@@ -128,11 +103,14 @@ int idpf_idc_vc_receive(struct idpf_rdma_data *rdma_data, u32 f_id, const u8 *ms
 
 	cdev_info = rdma_data->cdev_info;
 
-	device_lock(&cdev_info->adev->dev);
-	iadrv = idpf_get_auxiliary_drv(cdev_info);
-	if (iadrv && iadrv->vc_receive)
-		err = iadrv->vc_receive(cdev_info, f_id, (u8 *)msg, msg_size);
-	device_unlock(&cdev_info->adev->dev);
+	mutex_lock(&cdev_info->iidc_notifier_lock);
+	if (cdev_info->notifiers.vc_receive)
+		err = cdev_info->notifiers.vc_receive(cdev_info,
+						      f_id,
+						      (u8 *)msg,
+						      msg_size);
+	mutex_unlock(&cdev_info->iidc_notifier_lock);
+
 	if (err)
 		pr_err("Failed to pass receive idc msg, err %d\n", err);
 
@@ -282,12 +260,38 @@ idpf_idc_vc_qv_map_unmap(struct iidc_core_dev_info *cdev_info,
 	return -EOPNOTSUPP;
 }
 
+/**
+ * idpf_idc_register_notifier - Register notifiers
+ * @nb: Notifier callbacks
+ */
+static int idpf_idc_register_notifier(struct iidc_core_dev_info *cdev_info,
+				      const struct iidc_notifier_block *nb)
+{
+	mutex_lock(&cdev_info->iidc_notifier_lock);
+	cdev_info->notifiers = *nb;
+	mutex_unlock(&cdev_info->iidc_notifier_lock);
+	return 0;
+}
+
+/**
+ * idpf_idc_unregister_notifier - Unregister notifiers
+ */
+static int idpf_idc_unregister_notifier(struct iidc_core_dev_info *cdev_info)
+{
+	mutex_lock(&cdev_info->iidc_notifier_lock);
+	memset(&cdev_info->notifiers, 0, sizeof(cdev_info->notifiers));
+	mutex_unlock(&cdev_info->iidc_notifier_lock);
+	return 0;
+}
+
 /* Implemented by the Auxiliary Device and called by the Auxiliary Driver */
 static const struct iidc_core_ops idc_ops = {
 	.request_reset                  = idpf_idc_request_reset,
 	.vc_send                        = idpf_idc_vc_send,
 	.vc_send_sync			= idpf_idc_vc_send_sync,
 	.vc_queue_vec_map_unmap         = idpf_idc_vc_qv_map_unmap,
+	.register_notifier		= idpf_idc_register_notifier,
+	.unregister_notifier		= idpf_idc_unregister_notifier,
 };
 
 /**
@@ -470,6 +474,7 @@ idpf_idc_init_aux_device(struct idpf_rdma_data *rdma_data,
 	cdev_info->ops = &idc_ops;
 	cdev_info->rdma_protocol = IIDC_RDMA_PROTOCOL_IWARP;
 	cdev_info->cdev_info_id = IIDC_RDMA_ID;
+	mutex_init(&cdev_info->iidc_notifier_lock);
 
 	idpf_idc_init_qos_info(&cdev_info->qos_info);
 	idpf_idc_init_msix_data(rdma_data);

@@ -478,6 +478,10 @@ static void irdma_iidc_event_handler(struct iidc_core_dev_info *cdev_info, struc
 		if (iwdev->rf->reset)
 			iwdev->rf->gen_ops.request_reset(iwdev->rf);
 	} else if (*event->type & BIT(IIDC_EVENT_WARN_RESET)) {
+		/* TODO: This gets set from idpf context via the notifier, but is
+		 *       read in a few places in this driver (like AEQ interrupt).
+		 *       Maybe should be protected by a lock.
+		 */
 		iwdev->rf->reset = true;
 	}
 }
@@ -683,6 +687,8 @@ static void irdma_remove(struct auxiliary_device *aux_dev)
 	struct irdma_device *iwdev = auxiliary_get_drvdata(aux_dev);
 	u8 rdma_ver = iwdev->rf->rdma_ver;
 
+	cdev_info->ops->unregister_notifier(cdev_info);
+
 	if (rdma_ver == IRDMA_GEN_2 && !iwdev->rf->ftype) {
 		cancel_delayed_work_sync(&iwdev->rf->dwork_cqp_poll);
 		irdma_free_stag(iwdev->rf->iwdev, iwdev->rf->chk_stag);
@@ -876,6 +882,11 @@ static void irdma_modify_rdpu_bw(struct irdma_pci_f *rf)
 	dev_warn(rf->hw.device, "Set GL_RDPU_CNTRL[%x] = 0x%08X", GL_RDPU_CNTRL, val);
 }
 
+static const struct iidc_notifier_block idc_notifiers = {
+	.event_handler = irdma_iidc_event_handler,
+	.vc_receive = irdma_vchnl_receive,
+};
+
 static int irdma_probe(struct auxiliary_device *aux_dev, const struct auxiliary_device_id *id)
 {
 	struct iidc_auxiliary_dev *iidc_adev = container_of(aux_dev,
@@ -983,6 +994,8 @@ static int irdma_probe(struct auxiliary_device *aux_dev, const struct auxiliary_
 
 	auxiliary_set_drvdata(aux_dev, iwdev);
 
+	cdev_info->ops->register_notifier(cdev_info, &idc_notifiers);
+
 	return 0;
 
 err_ibreg:
@@ -1024,8 +1037,6 @@ static struct iidc_auxiliary_drv irdma_auxiliary_drv = {
 	    .probe = irdma_probe,
 	    .remove = irdma_remove,
 	},
-	.event_handler = irdma_iidc_event_handler,
-	.vc_receive = irdma_vchnl_receive,
 };
 
 static int __init irdma_init_module(void)
