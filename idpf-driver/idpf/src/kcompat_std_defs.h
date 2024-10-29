@@ -252,4 +252,9 @@
 #define HAVE_TTY_TERMIOS_CONST_STRUCT
 #endif /* 6.1.0 */
 
+#if (LINUX_VERSION_CODE < KERNEL_VERSION(6,11,0))
+#else /* >=6.11.0 */
+#define HAVE_KERNEL_ETHTOOL_TS_INFO
+#endif /* 6.11.0 */
+
 #endif /* _KCOMPAT_STD_DEFS_H_ */
