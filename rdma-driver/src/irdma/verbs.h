@@ -143,6 +143,7 @@ struct irdma_mr {
 	int access;
 	u8 is_hwreg;
 	u16 type;
+	bool dma_mr;
 	u32 page_cnt;
 	u64 page_size;
 	u64 page_msk;
