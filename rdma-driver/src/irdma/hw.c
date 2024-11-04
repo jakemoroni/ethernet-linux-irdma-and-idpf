@@ -3150,12 +3150,10 @@ void irdma_flush_wqes(struct irdma_qp *iwqp, u32 flush_mask)
 	struct irdma_qp_flush_info info = {};
 	struct irdma_pci_f *rf = iwqp->iwdev->rf;
 	u8 flush_code = iwqp->sc_qp.flush_code;
+	bool sched_flush = false;
 
 	if ((!(flush_mask & IRDMA_FLUSH_SQ) && !(flush_mask & IRDMA_FLUSH_RQ)) ||
 	    ((flush_mask & IRDMA_REFLUSH) && rf->rdma_ver >= IRDMA_GEN_3))
-		return;
-
-	if (atomic_cmpxchg(&iwqp->flush_issued, 0, 1))
 		return;
 
 	/* Set flush info fields*/
@@ -3187,11 +3185,19 @@ void irdma_flush_wqes(struct irdma_qp *iwqp, u32 flush_mask)
 		}
 		if (irdma_upload_context && irdma_upload_qp_context(iwqp, 0, 1))
 			ibdev_warn(&iwqp->iwdev->ibdev, "failed to upload QP context\n");
-		if (!iwqp->user_mode && rf->rdma_ver <= IRDMA_GEN_2)
-			irdma_sched_qp_flush_work(iwqp);
+		if (!iwqp->user_mode)
+			sched_flush = true;
 	}
 
 	/* Issue flush */
 	(void)irdma_hw_flush_wqes(rf, &iwqp->sc_qp, &info,
 				  flush_mask & IRDMA_FLUSH_WAIT);
+
+	/* Set "hardware flush done" flag. */
+	atomic_set(&iwqp->flush_issued, 1);
+
+	if (sched_flush) {
+		/* Moved the flush to after the HW flush is done. */
+		irdma_sched_qp_flush_work(iwqp);
+	}
 }

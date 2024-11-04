@@ -1332,10 +1332,13 @@ int irdma_modify_qp_roce(struct ib_qp *ibqp, struct ib_qp_attr *attr,
 			if (iwqp->ibqp_state > IB_QPS_RTS &&
 			    !atomic_read(&iwqp->flush_issued)) {
 				spin_unlock_irqrestore(&iwqp->lock, flags);
+				/* TODO(jmoroni): Is there a race here? Can another modify QP
+				 *                occur and kick off another flush since flush_issued
+				 *                doesn't get set until the end of irdma_flush_wqes?
+				 */
 				irdma_flush_wqes(iwqp, IRDMA_FLUSH_SQ |
 						       IRDMA_FLUSH_RQ |
 						       IRDMA_FLUSH_WAIT);
-
 			} else {
 				spin_unlock_irqrestore(&iwqp->lock, flags);
 			}
@@ -3624,18 +3627,13 @@ static int irdma_post_send(struct ib_qp *ibqp,
 		ib_wr = ib_wr->next;
 	}
 
-	if (ukqp->uk_attrs->hw_rev <= IRDMA_GEN_2) {
-		if (!atomic_read(&iwqp->flush_issued)) {
-			if (iwqp->hw_iwarp_state <= IRDMA_QP_STATE_RTS)
-				irdma_uk_qp_post_wr(ukqp);
-			spin_unlock_irqrestore(&iwqp->lock, flags);
-		} else {
-			spin_unlock_irqrestore(&iwqp->lock, flags);
-			irdma_sched_qp_flush_work(iwqp);
-		}
-	} else {
-		irdma_uk_qp_post_wr(ukqp);
+	if (!atomic_read(&iwqp->flush_issued)) {
+		if (iwqp->hw_iwarp_state <= IRDMA_QP_STATE_RTS)
+			irdma_uk_qp_post_wr(ukqp);
 		spin_unlock_irqrestore(&iwqp->lock, flags);
+	} else {
+		spin_unlock_irqrestore(&iwqp->lock, flags);
+		irdma_sched_qp_flush_work(iwqp);
 	}
 
 	if (err)
@@ -3731,8 +3729,7 @@ static int irdma_post_recv(struct ib_qp *ibqp,
 
 out:
 	spin_unlock_irqrestore(&iwqp->lock, flags);
-	if (ukqp->uk_attrs->hw_rev <= IRDMA_GEN_2 &&
-	    atomic_read(&iwqp->flush_issued))
+	if (atomic_read(&iwqp->flush_issued))
 		irdma_sched_qp_flush_work(iwqp);
 
 	if (err)

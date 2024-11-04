@@ -1963,8 +1963,7 @@ int irdma_create_qp(struct ib_qp *ibqp,
 		init_info.qp_uk_init_info.abi_ver = iwpd->sc_pd.abi_ver;
 		err_code = irdma_setup_umode_qp(udata, iwdev, iwqp, &init_info, init_attr);
 	} else {
-		if (uk_attrs->hw_rev <= IRDMA_GEN_2)
-			INIT_DELAYED_WORK(&iwqp->dwork_flush, irdma_flush_worker);
+		INIT_DELAYED_WORK(&iwqp->dwork_flush, irdma_flush_worker);
 		init_info.qp_uk_init_info.abi_ver = IRDMA_ABI_VER;
 		err_code = irdma_setup_kmode_qp(iwdev, iwqp, &init_info, init_attr);
 	}
@@ -2225,8 +2224,7 @@ struct ib_qp *irdma_create_qp(struct ib_pd *ibpd,
 		init_info.qp_uk_init_info.abi_ver = iwpd->sc_pd.abi_ver;
 		err_code = irdma_setup_umode_qp(udata, iwdev, iwqp, &init_info, init_attr);
 	} else {
-		if (uk_attrs->hw_rev <= IRDMA_GEN_2)
-			INIT_DELAYED_WORK(&iwqp->dwork_flush, irdma_flush_worker);
+		INIT_DELAYED_WORK(&iwqp->dwork_flush, irdma_flush_worker);
 		init_info.qp_uk_init_info.abi_ver = IRDMA_ABI_VER;
 		err_code = irdma_setup_kmode_qp(iwdev, iwqp, &init_info, init_attr);
 	}
