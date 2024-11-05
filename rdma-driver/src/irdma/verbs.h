@@ -268,6 +268,7 @@ struct irdma_qp {
 	dma_addr_t pbl_pbase;
 	struct page *page;
 	u8 iwarp_state;
+	bool flush_oneshot;
 	atomic_t flush_issued;
 	u16 term_sq_flush_code;
 	u16 term_rq_flush_code;

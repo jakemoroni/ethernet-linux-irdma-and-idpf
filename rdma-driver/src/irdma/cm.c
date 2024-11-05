@@ -3522,7 +3522,7 @@ static void irdma_cm_disconn_true(struct irdma_qp *iwqp)
 	if (rdma_protocol_roce(&iwdev->ibdev, 1)) {
 		struct ib_qp_attr attr;
 
-		if (atomic_read(&iwqp->flush_issued) ||
+		if (iwqp->flush_oneshot ||
 		    iwqp->sc_qp.qp_uk.destroy_pending) {
 			spin_unlock_irqrestore(&iwqp->lock, flags);
 			return;
@@ -3546,8 +3546,10 @@ static void irdma_cm_disconn_true(struct irdma_qp *iwqp)
 		issue_close = 1;
 		iwqp->cm_id = NULL;
 		irdma_terminate_del_timer(qp);
-		if (!atomic_read(&iwqp->flush_issued))
+		if (!iwqp->flush_oneshot) {
+			iwqp->flush_oneshot = true;
 			issue_flush = 1;
+		}
 	} else if ((original_hw_tcp_state == IRDMA_TCP_STATE_CLOSE_WAIT) ||
 		   ((original_ibqp_state == IB_QPS_RTS) &&
 		    (last_ae == IRDMA_AE_LLP_CONNECTION_RESET))) {
@@ -3564,8 +3566,10 @@ static void irdma_cm_disconn_true(struct irdma_qp *iwqp)
 		issue_close = 1;
 		iwqp->cm_id = NULL;
 		qp->term_flags = 0;
-		if (!atomic_read(&iwqp->flush_issued))
+		if (!iwqp->flush_oneshot) {
+			iwqp->flush_oneshot = true;
 			issue_flush = 1;
+		}
 	}
 
 	spin_unlock_irqrestore(&iwqp->lock, flags);

@@ -1315,6 +1315,7 @@ int irdma_modify_qp_roce(struct ib_qp *ibqp, struct ib_qp_attr *attr,
 
 	if (attr_mask & IB_QP_STATE) {
 		if (issue_modify_qp) {
+			bool do_flush = false;
 			ctx_info->rem_endpoint_idx = udp_info->arp_idx;
 			if (irdma_hw_modify_qp(iwdev, iwqp, &info, true))
 				return -EINVAL;
@@ -1329,18 +1330,15 @@ int irdma_modify_qp_roce(struct ib_qp *ibqp, struct ib_qp_attr *attr,
 				iwqp->ibqp_state = attr->qp_state;
 				iwqp->sc_qp.qp_state = iwqp->iwarp_state;
 			}
-			if (iwqp->ibqp_state > IB_QPS_RTS &&
-			    !atomic_read(&iwqp->flush_issued)) {
-				spin_unlock_irqrestore(&iwqp->lock, flags);
-				/* TODO(jmoroni): Is there a race here? Can another modify QP
-				 *                occur and kick off another flush since flush_issued
-				 *                doesn't get set until the end of irdma_flush_wqes?
-				 */
+			if (iwqp->ibqp_state > IB_QPS_RTS && !iwqp->flush_oneshot) {
+				iwqp->flush_oneshot = true;
+				do_flush = true;
+			}
+			spin_unlock_irqrestore(&iwqp->lock, flags);
+			if (do_flush) {
 				irdma_flush_wqes(iwqp, IRDMA_FLUSH_SQ |
 						       IRDMA_FLUSH_RQ |
 						       IRDMA_FLUSH_WAIT);
-			} else {
-				spin_unlock_irqrestore(&iwqp->lock, flags);
 			}
 		} else {
 			iwqp->ibqp_state = attr->qp_state;
