@@ -963,9 +963,6 @@ static int irdma_probe(struct auxiliary_device *aux_dev, const struct auxiliary_
 	if (err)
 		goto err_rt_init;
 
-	err = irdma_register_notifiers(iwdev);
-	if (err)
-		goto err_notifier_reg;
 	irdma_add_handler(hdl);
 #ifdef CONFIG_DEBUG_FS
 	irdma_dbg_pf_init(hdl);
@@ -996,6 +993,14 @@ static int irdma_probe(struct auxiliary_device *aux_dev, const struct auxiliary_
 
 	cdev_info->ops->register_notifier(cdev_info, &idc_notifiers);
 
+	/* Register notifiers after device is fully created. */
+	err = irdma_register_notifiers(iwdev);
+	if (err) {
+		ibdev_err(&iwdev->ibdev, "INIT: Failed to register notifiers\n");
+		irdma_remove(aux_dev);
+		return err;
+	}
+
 	return 0;
 
 err_ibreg:
@@ -1004,7 +1009,6 @@ err_ibreg:
 #endif
 	irdma_del_handler(iwdev->hdl);
 	irdma_unregister_notifiers(iwdev);
-err_notifier_reg:
 	irdma_rt_deinit_hw(iwdev);
 err_rt_init:
 	irdma_ctrl_deinit_hw(rf);
