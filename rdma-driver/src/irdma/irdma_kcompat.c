@@ -2555,6 +2555,8 @@ struct ib_cq *irdma_create_cq(struct ib_device *ibdev,
 		entries++;
 		if (!cqe_64byte_ena && dev->hw_attrs.uk_attrs.hw_rev >= IRDMA_GEN_2)
 			entries *= 2;
+		if (entries & 1)
+			entries += 1; /* cq size must be an even number */
 		ukinfo->cq_size = entries;
 
 		if (cqe_64byte_ena)
