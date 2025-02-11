@@ -883,7 +883,7 @@ static int idpf_cfg_netdev(struct idpf_vport *vport)
 		netdev->netdev_ops = &idpf_netdev_ops_singleq;
 
 	/* setup watchdog timeout value to be 5 second */
-	netdev->watchdog_timeo = 5 * HZ;
+	netdev->watchdog_timeo = 10 * HZ;
 
 	/* Update dev_port field to provide an unique id which is
 	 * understood by both CP config file and user scripts
@@ -1788,12 +1788,6 @@ void idpf_init_task(struct work_struct *work)
 	if (err)
 		goto handle_err;
 
-	if (!vport->idx) {
-		err = idpf_idc_init(adapter);
-		if (err)
-			goto handle_err;
-	}
-
 	if (test_and_clear_bit(IDPF_VPORT_UP_REQUESTED, vport_config->flags)) {
 		idpf_vport_ctrl_lock(adapter);
 		idpf_vport_open(vport, true);
@@ -1819,6 +1813,8 @@ void idpf_init_task(struct work_struct *work)
 				netif_device_attach(adapter->netdevs[index]);
 		}
 	}
+
+	idpf_idc_init(adapter);
 
 	/* As all the required vports are created, clear the reset flag
 	 * unconditionally here in case we were in reset and the link was down.
@@ -2566,6 +2562,7 @@ static netdev_features_t idpf_fix_features(struct net_device *netdev,
 static int idpf_open(struct net_device *netdev)
 {
 	struct idpf_adapter *adapter = idpf_netdev_to_adapter(netdev);
+	struct idpf_netdev_priv *np = netdev_priv(netdev);
 	struct idpf_vport *vport;
 	int err;
 
@@ -2573,6 +2570,12 @@ static int idpf_open(struct net_device *netdev)
 		return 0;
 
 	idpf_vport_ctrl_lock(adapter);
+
+	if (np->active) {
+		err = 0;
+		goto unlock;
+	}
+
 	vport = idpf_netdev_to_vport(netdev);
 
 	err = idpf_vport_open(vport, true);
