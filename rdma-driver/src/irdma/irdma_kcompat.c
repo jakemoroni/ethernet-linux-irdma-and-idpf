@@ -946,25 +946,49 @@ static int irdma_create_ah_wait(struct irdma_pci_f *rf,
 	int ret;
 
 	if (!sleep) {
-		int cnt = rf->sc_dev.hw_attrs.max_cqp_compl_wait_time_ms *
-			  CQP_TIMEOUT_THRESHOLD;
+		bool timeout = false;
+		u64 start = get_jiffies_64();
+		u64 completed_ops = atomic64_read(&rf->sc_dev.cqp->completed_ops);
 		struct irdma_cqp_request *cqp_request =
 			sc_ah->ah_info.cqp_request;
+		const u64 timeout_jiffies =
+			msecs_to_jiffies(rf->sc_dev.hw_attrs.max_cqp_compl_wait_time_ms *
+					 CQP_TIMEOUT_THRESHOLD);
 
-		do {
+		/* NOTE: irdma_check_cqp_progress is not used here because it relies on
+		 *       a notion of a cycle count, but we want to avoid unnecessary delays.
+		 *       We are in an atomic context here, so we might as well check in
+		 *       a tight loop.
+		 */
+		while (!READ_ONCE(cqp_request->request_done)) {
+			u64 tmp;
+			u64 curr_jiffies;
+
 			irdma_cqp_ce_handler(rf, &rf->ccq.sc_cq);
-			mdelay(1);
-		} while (!READ_ONCE(cqp_request->request_done) && --cnt);
 
-		if (cnt && !cqp_request->compl_info.op_ret_val) {
+			curr_jiffies = get_jiffies_64();
+			tmp = atomic64_read(&rf->sc_dev.cqp->completed_ops);
+			if (tmp != completed_ops) {
+				/* CQP is progressing. Reset timer. */
+				completed_ops = tmp;
+				start = curr_jiffies;
+			}
+
+			if ((curr_jiffies - start) > timeout_jiffies) {
+				timeout = true;
+				break;
+			}
+		}
+
+		if (!timeout && !cqp_request->compl_info.op_ret_val) {
 			irdma_put_cqp_request(&rf->cqp, cqp_request);
 			sc_ah->ah_info.ah_valid = true;
 		} else {
-			ret = !cnt ? -ETIMEDOUT : -EINVAL;
+			ret = timeout ? -ETIMEDOUT : -EINVAL;
 			ibdev_err(&rf->iwdev->ibdev, "CQP create AH error ret = %d opt_ret_val = %d",
 				  ret, cqp_request->compl_info.op_ret_val);
 			irdma_put_cqp_request(&rf->cqp, cqp_request);
-			if (!cnt && !rf->reset) {
+			if (timeout && !rf->reset) {
 				rf->reset = true;
 				rf->gen_ops.request_reset(rf);
 			}
