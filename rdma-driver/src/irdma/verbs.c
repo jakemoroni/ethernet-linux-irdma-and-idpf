@@ -3532,6 +3532,10 @@ static int irdma_post_send(struct ib_qp *ibqp,
 				info.op.send.dest_qp = ud_wr(ib_wr)->remote_qpn;
 			}
 
+			if (iwqp->ibqp.qp_type == IB_QPT_GSI) {
+				atomic_inc(&iwqp->iwdev->mad_qp_stats.posted_send_wrs);
+			}
+
 			if (ib_wr->send_flags & IB_SEND_INLINE) {
 				err = irdma_uk_inline_send(ukqp, &info, false);
 			} else {
@@ -3725,6 +3729,10 @@ static int irdma_post_recv(struct ib_qp *ibqp,
 			goto out;
 		}
 
+		if (iwqp->ibqp.qp_type == IB_QPT_GSI) {
+			atomic_inc(&iwqp->iwdev->mad_qp_stats.posted_recv_wrs);
+		}
+
 		ib_wr = ib_wr->next;
 	}
 
@@ -3790,12 +3798,21 @@ static void irdma_process_cqe(struct ib_wc *entry,
 	entry->qp = qp->qp_uk.back_qp;
 
 	if (cq_poll_info->error) {
+		if (entry->qp->qp_type == IB_QPT_GSI) {
+			atomic_inc(&(to_iwdev(to_ibdev(qp->dev))->mad_qp_stats.completed_error_wrs));
+		}
 		entry->status = (cq_poll_info->comp_status == IRDMA_COMPL_STATUS_FLUSHED) ?
 				irdma_flush_err_to_ib_wc_status(cq_poll_info->minor_err) : IB_WC_GENERAL_ERR;
 
 		entry->vendor_err = cq_poll_info->major_err << 16 |
 				    cq_poll_info->minor_err;
 	} else {
+		if (entry->qp->qp_type == IB_QPT_GSI) {
+			if (cq_poll_info->q_type == IRDMA_CQE_QTYPE_SQ)
+				atomic_inc(&(to_iwdev(to_ibdev(qp->dev))->mad_qp_stats.completed_send_wrs));
+			else
+				atomic_inc(&(to_iwdev(to_ibdev(qp->dev))->mad_qp_stats.completed_recv_wrs));
+		}
 		entry->status = IB_WC_SUCCESS;
 		if (cq_poll_info->imm_valid) {
 			entry->ex.imm_data = htonl(cq_poll_info->imm_data);
@@ -3894,6 +3911,8 @@ static int __irdma_poll_cq(struct irdma_cq *iwcq, int num_entries, struct ib_wc 
 
 	iwdev = to_iwdev(iwcq->ibcq.device);
 	ukcq = &iwcq->sc_cq.cq_uk;
+
+	atomic_inc(&iwdev->cq_polls);
 
 	/* go through the list of previously resized CQ buffers */
 	list_for_each_safe(list_node, tmp_node, &iwcq->resize_list) {

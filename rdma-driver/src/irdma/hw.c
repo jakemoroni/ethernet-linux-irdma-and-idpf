@@ -60,7 +60,7 @@ static enum irdma_hmc_rsrc_type iw_hmc_obj_types[] = {
  * irdma_iwarp_ce_handler - handle iwarp completions
  * @iwcq: iwarp cq receiving event
  */
-static void irdma_iwarp_ce_handler(struct irdma_sc_cq *iwcq)
+void irdma_iwarp_ce_handler(struct irdma_sc_cq *iwcq)
 {
 	struct irdma_cq *cq = iwcq->back_cq;
 

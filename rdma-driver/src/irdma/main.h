@@ -472,6 +472,14 @@ struct irdma_device {
 	int name_id;
 #endif
 	char ib_devname[IB_DEVICE_NAME_MAX];
+	struct {
+		atomic_t posted_send_wrs;
+		atomic_t posted_recv_wrs;
+		atomic_t completed_send_wrs;
+		atomic_t completed_recv_wrs;
+		atomic_t completed_error_wrs;
+	} mad_qp_stats;
+	atomic_t cq_polls;
 };
 
 struct irdma_handler {
@@ -694,6 +702,7 @@ int irdma_ah_cqp_op(struct irdma_pci_f *rf, struct irdma_sc_ah *sc_ah, u8 cmd,
 		    void (*callback_fcn)(struct irdma_cqp_request *cqp_request),
 		    void *cb_param);
 bool irdma_cq_empty(struct irdma_cq *iwcq);
+void irdma_iwarp_ce_handler(struct irdma_sc_cq *iwcq);
 #if IS_ENABLED(CONFIG_CONFIGFS_FS)
 struct irdma_device *irdma_get_device_by_name(const char *name);
 #endif

@@ -672,6 +672,47 @@ static void dump_cq_cmd(struct irdma_pci_f *rf, const char *cbuf)
 	}
 }
 
+static void poke_cq_cmd(struct irdma_pci_f *rf, const char *cbuf)
+{
+	static long cq_id;
+	char cqstr[11];
+	int offset;
+	int rc;
+	struct irdma_cq *iwcq;
+
+	if (cmdnew) {
+		if (sscanf(cbuf, "%10s%n", cqstr, &offset) == 0)
+			return;
+
+		rc = kstrtoul(cqstr, 0, &cq_id);
+		if (rc)
+			return;
+
+		if (cq_id >= rf->cqp.sc_cqp.dev->hmc_info->hmc_obj[IRDMA_HMC_IW_CQ].max_cnt) {
+			dbg_vsnprintf("CQ %ld is not valid\n", cq_id);
+			return;
+		}
+	}
+
+	iwcq = rf->cq_table[cq_id];
+	if (!iwcq) {
+		long old = cq_id;
+		cq_id = find_next_cq_num(rf, cq_id);
+		dbg_vsnprintf("CQ ID %ld not found in table, next CQ ID is %ld\n", old, cq_id);
+	}
+
+	if (iwcq && !iwcq->user_mode) {
+		unsigned long flags;
+
+		spin_lock_irqsave(&iwcq->lock, flags);
+		dbg_vsnprintf("Invoking callback for CQ %ld\n", cq_id);
+		irdma_iwarp_ce_handler(&iwcq->sc_cq);
+		spin_unlock_irqrestore(&iwcq->lock, flags);
+	}
+
+	cmddone = true;
+}
+
 /**
  * dump_stats_cmd - Dump statistics
  * @iwdev: device
@@ -881,6 +922,19 @@ static void dump_stats_cmd(struct irdma_device *iwdev)
 	dbg_vsnprintf("AH list cnt HWM                  %d\n",
 		      iwdev->ah_list_hwm);
 
+	dbg_vsnprintf("MAD QP Posted Send WRs           %d\n",
+		      atomic_read(&iwdev->mad_qp_stats.posted_send_wrs));
+	dbg_vsnprintf("MAD QP Completed Send WRs        %d\n",
+		      atomic_read(&iwdev->mad_qp_stats.completed_send_wrs));
+	dbg_vsnprintf("MAD QP Posted Recv WRs           %d\n",
+		      atomic_read(&iwdev->mad_qp_stats.posted_recv_wrs));
+	dbg_vsnprintf("MAD QP Completed Recv WRs        %d\n",
+		      atomic_read(&iwdev->mad_qp_stats.completed_recv_wrs));
+	dbg_vsnprintf("MAD QP Completed Error WRs       %d\n",
+		      atomic_read(&iwdev->mad_qp_stats.completed_error_wrs));
+
+	dbg_vsnprintf("Kernel CQ Polls                  %d\n",
+		      atomic_read(&iwdev->cq_polls));
 #if IS_ENABLED(CONFIG_CONFIGFS_FS)
 	if  (iwdev->roce_mode) {
 		dbg_vsnprintf("roce rtomin  = %d\n", iwdev->roce_rtomin);
@@ -1197,6 +1251,8 @@ static ssize_t irdma_dbg_dump_read(struct file *filp,
 			dump_qp_cmd(rf, &cmd_buf[3]);
 		else if (strncasecmp(cmd_buf, "cq ", 3) == 0)
 			dump_cq_cmd(rf, &cmd_buf[3]);
+		else if (strncasecmp(cmd_buf, "pokecq ", 7) == 0)
+			poke_cq_cmd(rf, &cmd_buf[7]);
 		else if (strncasecmp(cmd_buf, "sw-stats", 8) == 0)
 			dump_stats_cmd(iwdev);
 		else if (strncasecmp(cmd_buf, "hw-stats", 8) == 0)
