@@ -1375,13 +1375,6 @@ int irdma_uk_cq_poll_cmpl(struct irdma_cq_uk *cq,
 	is_srq = (u8)FIELD_GET(IRDMA_CQ_SRQ, qword3);
 	info->error = (bool)FIELD_GET(IRDMA_CQ_ERROR, qword3);
 
-	if (info->error && qp->qp_type == IRDMA_QP_TYPE_ROCE_UD) {
-		info->error = false;
-		info->ud_error_masked = true;
-	} else {
-		info->ud_error_masked = false;
-	}
-
 	info->push_dropped = (bool)FIELD_GET(IRDMACQ_PSHDROP, qword3);
 	info->ipv4 = (bool)FIELD_GET(IRDMACQ_IPV4, qword3);
 	get_64bit_val(cqe, 8, &comp_ctx);
@@ -1393,6 +1386,14 @@ int irdma_uk_cq_poll_cmpl(struct irdma_cq_uk *cq,
 		ret_code = -EFAULT;
 		goto exit;
 	}
+
+	if (info->error && qp->qp_type == IRDMA_QP_TYPE_ROCE_UD) {
+		info->error = false;
+		info->ud_error_masked = true;
+	} else {
+		info->ud_error_masked = false;
+	}
+
 	if (info->error) {
 		info->major_err = FIELD_GET(IRDMA_CQ_MAJERR, qword3);
 		info->minor_err = FIELD_GET(IRDMA_CQ_MINERR, qword3);
