@@ -477,7 +477,7 @@ struct irdma_device {
 		atomic_t posted_recv_wrs;
 		atomic_t completed_send_wrs;
 		atomic_t completed_recv_wrs;
-		atomic_t completed_error_wrs;
+		atomic_t masked_error_wrs;
 	} mad_qp_stats;
 	atomic_t cq_polls;
 };

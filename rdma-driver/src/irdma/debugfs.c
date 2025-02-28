@@ -930,9 +930,8 @@ static void dump_stats_cmd(struct irdma_device *iwdev)
 		      atomic_read(&iwdev->mad_qp_stats.posted_recv_wrs));
 	dbg_vsnprintf("MAD QP Completed Recv WRs        %d\n",
 		      atomic_read(&iwdev->mad_qp_stats.completed_recv_wrs));
-	dbg_vsnprintf("MAD QP Completed Error WRs       %d\n",
-		      atomic_read(&iwdev->mad_qp_stats.completed_error_wrs));
-
+	dbg_vsnprintf("MAD QP Masked Error WRs          %d\n",
+		      atomic_read(&iwdev->mad_qp_stats.masked_error_wrs));
 	dbg_vsnprintf("Kernel CQ Polls                  %d\n",
 		      atomic_read(&iwdev->cq_polls));
 #if IS_ENABLED(CONFIG_CONFIGFS_FS)

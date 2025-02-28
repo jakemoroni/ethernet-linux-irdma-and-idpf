@@ -3797,10 +3797,11 @@ static void irdma_process_cqe(struct ib_wc *entry,
 	qp = cq_poll_info->qp_handle;
 	entry->qp = qp->qp_uk.back_qp;
 
+	if (cq_poll_info->ud_error_masked &&
+	    entry->qp->qp_type == IB_QPT_GSI)
+		atomic_inc(&(to_iwdev(to_ibdev(qp->dev))->mad_qp_stats.masked_error_wrs));
+
 	if (cq_poll_info->error) {
-		if (entry->qp->qp_type == IB_QPT_GSI) {
-			atomic_inc(&(to_iwdev(to_ibdev(qp->dev))->mad_qp_stats.completed_error_wrs));
-		}
 		entry->status = (cq_poll_info->comp_status == IRDMA_COMPL_STATUS_FLUSHED) ?
 				irdma_flush_err_to_ib_wc_status(cq_poll_info->minor_err) : IB_WC_GENERAL_ERR;
 

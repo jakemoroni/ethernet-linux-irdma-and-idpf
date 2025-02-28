@@ -437,6 +437,7 @@ struct irdma_cq_poll_info {
 	bool ud_vlan_valid:1;
 	bool ud_smac_valid:1;
 	bool imm_valid:1;
+	bool ud_error_masked;
 };
 
 struct qp_err_code {
