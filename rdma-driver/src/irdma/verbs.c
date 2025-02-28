@@ -3977,7 +3977,7 @@ static int __irdma_poll_cq(struct irdma_cq *iwcq, int num_entries, struct ib_wc 
 
 	return npolled;
 error:
-	ibdev_dbg(&iwdev->ibdev, "VERBS: %s: Error polling CQ, irdma_err: %d\n",
+	ibdev_err(&iwdev->ibdev, "VERBS: %s: Error polling CQ, irdma_err: %d\n",
 		  __func__, ret);
 
 	return ret;
@@ -4039,8 +4039,10 @@ static int irdma_req_notify_cq(struct ib_cq *ibcq,
 	}
 
 	if ((notify_flags & IB_CQ_REPORT_MISSED_EVENTS) &&
-	    (!irdma_cq_empty(iwcq) || !list_empty(&iwcq->cmpl_generated)))
+	    (!irdma_cq_empty(iwcq) || !list_empty(&iwcq->cmpl_generated))) {
+		iwcq->sc_cq.dev->missed_cq_arm++;
 		ret = 1;
+	}
 	spin_unlock_irqrestore(&iwcq->lock, flags);
 
 	return ret;
