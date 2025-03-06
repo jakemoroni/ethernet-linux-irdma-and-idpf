@@ -418,7 +418,12 @@ struct irdma_device {
 	struct irdma_cm_core cm_core;
 	struct irdma_ae_info ae_info;
 	DECLARE_HASHTABLE(ah_hash_tbl, 8);
-	struct mutex ah_tbl_lock;
+	struct list_head ah_deletion_list;
+	u32 ah_deletion_list_cnt;
+	u32 ah_deletion_list_cnt_total;
+	u32 ah_deletion_list_cnt_peak;
+	spinlock_t ah_tbl_lock;
+	struct mutex delete_lock;
 #ifdef CONFIG_DEBUG_FS
 	u64 ah_reused;
 #endif

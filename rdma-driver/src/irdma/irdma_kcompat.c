@@ -1015,22 +1015,32 @@ static bool irdma_ah_exists(struct irdma_device *iwdev,
 {
 	struct irdma_ah *ah;
 	u32 save_ah_id = new_ah->sc_ah.ah_info.ah_idx;
+	u32 save_flow_label = new_ah->sc_ah.ah_info.flow_label;
 	u32 key = new_ah->sc_ah.ah_info.dest_ip_addr[0] ^
 		  new_ah->sc_ah.ah_info.dest_ip_addr[1] ^
 		  new_ah->sc_ah.ah_info.dest_ip_addr[2] ^
 		  new_ah->sc_ah.ah_info.dest_ip_addr[3];
 
 	hash_for_each_possible(iwdev->ah_hash_tbl, ah, list, key) {
-		/* Set ah_id the same so memcp can work */
+		/* Set ah_id the same so memcpy can work */
 		new_ah->sc_ah.ah_info.ah_idx = ah->sc_ah.ah_info.ah_idx;
+		new_ah->sc_ah.ah_info.flow_label = ah->sc_ah.ah_info.flow_label;
 		if (!memcmp(&ah->sc_ah.ah_info, &new_ah->sc_ah.ah_info,
 			    sizeof(ah->sc_ah.ah_info))) {
-			refcount_inc(&ah->refcnt);
+			if (!ah->refcnt) {
+				/* Item was on the pending deletion list, so
+				 * remove since there's now a new reference to it.
+				 */
+				list_del(&ah->node);
+				iwdev->ah_deletion_list_cnt--;
+			}
+			ah->refcnt++;
 			new_ah->parent_ah = ah;
 			return true;
 		}
 	}
 	new_ah->sc_ah.ah_info.ah_idx = save_ah_id;
+	new_ah->sc_ah.ah_info.flow_label = save_flow_label;
 	/* Add new AH to list */
 	ah = kmemdup(new_ah, sizeof(*new_ah), GFP_KERNEL);
 	if (!ah)
@@ -1041,7 +1051,7 @@ static bool irdma_ah_exists(struct irdma_device *iwdev,
 	iwdev->ah_list_cnt++;
 	if (iwdev->ah_list_cnt > iwdev->ah_list_hwm)
 		iwdev->ah_list_hwm = iwdev->ah_list_cnt;
-	refcount_set(&ah->refcnt, 1);
+	ah->refcnt = 1;
 
 	return false;
 }
@@ -1305,16 +1315,15 @@ int irdma_create_ah_v2(struct ib_ah *ib_ah,
 	if (err)
 		goto err_gid_l2;
 
-	if (sleep) {
-		mutex_lock(&iwdev->ah_tbl_lock);
-		if (irdma_ah_exists(iwdev, ah)) {
-			irdma_free_rsrc(iwdev->rf, iwdev->rf->allocated_ahs, ah_id);
-			ah_id = 0;
+	spin_lock(&iwdev->ah_tbl_lock);
+	if (irdma_ah_exists(iwdev, ah)) {
+		irdma_free_rsrc(iwdev->rf, iwdev->rf->allocated_ahs, ah_id);
+		ah_id = 0;
 #ifdef CONFIG_DEBUG_FS
-			iwdev->ah_reused++;
+		iwdev->ah_reused++;
 #endif
-			goto exit;
-		}
+		goto exit;
+
 	}
 
 	err = irdma_ah_cqp_op(iwdev->rf, sc_ah, IRDMA_OP_AH_CREATE,
@@ -1333,28 +1342,21 @@ exit:
 		uresp.ah_id = ah->sc_ah.ah_info.ah_idx;
 		err = ib_copy_to_udata(udata, &uresp, min(sizeof(uresp), udata->outlen));
 		if (err) {
-			if (!ah->parent_ah ||
-			    (ah->parent_ah && refcount_dec_and_test(&ah->parent_ah->refcnt))) {
-				irdma_ah_cqp_op(iwdev->rf, &ah->sc_ah,
-						IRDMA_OP_AH_DESTROY, false, NULL, ah);
-				ah_id = ah->sc_ah.ah_info.ah_idx;
-				goto err_ah_create;
-			}
-			goto err_unlock;
+			goto err_ah_create;
 		}
 	}
-	if (sleep)
-		mutex_unlock(&iwdev->ah_tbl_lock);
+
+	spin_unlock(&iwdev->ah_tbl_lock);
 	return 0;
 err_ah_create:
-	if (ah->parent_ah) {
-		hash_del(&ah->parent_ah->list);
-		kfree(ah->parent_ah);
-		iwdev->ah_list_cnt--;
+	ah->parent_ah->refcnt--;
+	if (!ah->parent_ah->refcnt) {
+		/* Last ref dropped, add to deferred delete list. */
+		list_add_tail(&ah->parent_ah->node, &iwdev->ah_deletion_list);
+		iwdev->ah_deletion_list_cnt++;
+		ah->parent_ah->deletion_timestamp = ktime_get_raw_ns();
 	}
-err_unlock:
-	if (sleep)
-		mutex_unlock(&iwdev->ah_tbl_lock);
+	spin_unlock(&iwdev->ah_tbl_lock);
 err_gid_l2:
 	if (ah_id)
 		irdma_free_rsrc(iwdev->rf, iwdev->rf->allocated_ahs, ah_id);
@@ -2781,22 +2783,23 @@ int irdma_destroy_ah(struct ib_ah *ibah, u32 ah_flags)
 	struct irdma_device *iwdev = to_iwdev(ibah->device);
 	struct irdma_ah *ah = to_iwah(ibah);
 
-	if (ah->parent_ah) {
-		mutex_lock(&iwdev->ah_tbl_lock);
-		if (!refcount_dec_and_test(&ah->parent_ah->refcnt)) {
-			mutex_unlock(&iwdev->ah_tbl_lock);
-			return 0;
-		}
-		hash_del(&ah->parent_ah->list);
-		kfree(ah->parent_ah);
-		iwdev->ah_list_cnt--;
-		mutex_unlock(&iwdev->ah_tbl_lock);
+	if (!ah->parent_ah) {
+		BUG();
 	}
-	irdma_ah_cqp_op(iwdev->rf, &ah->sc_ah, IRDMA_OP_AH_DESTROY,
-			false, NULL, ah);
 
-	irdma_free_rsrc(iwdev->rf, iwdev->rf->allocated_ahs,
-			ah->sc_ah.ah_info.ah_idx);
+	spin_lock(&iwdev->ah_tbl_lock);
+	ah->parent_ah->refcnt--;
+	if (!ah->parent_ah->refcnt) {
+		/* Last ref dropped, add to deferred delete list. */
+		list_add_tail(&ah->parent_ah->node, &iwdev->ah_deletion_list);
+		iwdev->ah_deletion_list_cnt++;
+		iwdev->ah_deletion_list_cnt_total++;
+		if (iwdev->ah_deletion_list_cnt > iwdev->ah_deletion_list_cnt_peak) {
+			iwdev->ah_deletion_list_cnt_peak = iwdev->ah_deletion_list_cnt;
+		}
+		ah->parent_ah->deletion_timestamp = ktime_get_raw_ns();
+	}
+	spin_unlock(&iwdev->ah_tbl_lock);
 
 	return 0;
 }

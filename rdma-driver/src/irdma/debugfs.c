@@ -931,6 +931,12 @@ static void dump_stats_cmd(struct irdma_device *iwdev)
 		      iwdev->ah_list_cnt);
 	dbg_vsnprintf("AH list cnt HWM                  %d\n",
 		      iwdev->ah_list_hwm);
+	dbg_vsnprintf("AH deletion list cnt curr        %u\n",
+		      iwdev->ah_deletion_list_cnt);
+	dbg_vsnprintf("AH deletion list cnt total       %u\n",
+		      iwdev->ah_deletion_list_cnt_total);
+	dbg_vsnprintf("AH deletion list cnt peak        %u\n",
+		      iwdev->ah_deletion_list_cnt_peak);
 
 	dbg_vsnprintf("MAD QP Posted Send WRs           %d\n",
 		      atomic_read(&iwdev->mad_qp_stats.posted_send_wrs));
