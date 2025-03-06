@@ -32,7 +32,7 @@ static int irdma_query_device(struct ib_device *ibdev,
 	props->hw_ver = pcidev->revision;
 	props->page_size_cap = hw_attrs->page_size_cap;
 	props->max_mr_size = hw_attrs->max_mr_size;
-	props->max_qp = rf->max_qp - rf->used_qps;
+	props->max_qp = QPN_LIMIT_WA - rf->used_qps;
 	props->max_qp_wr = hw_attrs->max_qp_wr;
 	set_max_sge(props, rf);
 	props->max_cq = rf->max_cq - rf->used_cqs;
