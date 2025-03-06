@@ -1264,7 +1264,6 @@ int irdma_create_ah_v2(struct ib_ah *ib_ah,
 	union irdma_sockaddr sgid_addr, dgid_addr;
 	int err;
 	u8 dmac[ETH_ALEN];
-	bool sleep = (flags & RDMA_CREATE_AH_SLEEPABLE) != 0;
 
 	if (udata && udata->outlen < IRDMA_CREATE_AH_MIN_RESP_LEN)
 		return -EINVAL;
@@ -1327,13 +1326,13 @@ int irdma_create_ah_v2(struct ib_ah *ib_ah,
 	}
 
 	err = irdma_ah_cqp_op(iwdev->rf, sc_ah, IRDMA_OP_AH_CREATE,
-			      sleep, NULL, sc_ah);
+			      false, NULL, sc_ah);
 	if (err) {
 		ibdev_dbg(&iwdev->ibdev, "CQP-OP Create AH fail");
 		goto err_ah_create;
 	}
 
-	err = irdma_create_ah_wait(rf, sc_ah, sleep);
+	err = irdma_create_ah_wait(rf, sc_ah, false);
 	if (err)
 		goto err_gid_l2;
 
