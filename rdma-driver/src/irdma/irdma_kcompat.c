@@ -1042,7 +1042,7 @@ static bool irdma_ah_exists(struct irdma_device *iwdev,
 	new_ah->sc_ah.ah_info.ah_idx = save_ah_id;
 	new_ah->sc_ah.ah_info.flow_label = save_flow_label;
 	/* Add new AH to list */
-	ah = kmemdup(new_ah, sizeof(*new_ah), GFP_KERNEL);
+	ah = kmemdup(new_ah, sizeof(*new_ah), GFP_ATOMIC);
 	if (!ah)
 		return false;
 	new_ah->parent_ah = ah;
@@ -1328,15 +1328,19 @@ int irdma_create_ah_v2(struct ib_ah *ib_ah,
 	err = irdma_ah_cqp_op(iwdev->rf, sc_ah, IRDMA_OP_AH_CREATE,
 			      false, NULL, sc_ah);
 	if (err) {
-		ibdev_dbg(&iwdev->ibdev, "CQP-OP Create AH fail");
+		ibdev_err(&iwdev->ibdev, "CQP-OP Create AH fail");
+		spin_unlock(&iwdev->ah_tbl_lock);
 		goto err_ah_create;
 	}
 
 	err = irdma_create_ah_wait(rf, sc_ah, false);
-	if (err)
-		goto err_gid_l2;
+	if (err) {
+		spin_unlock(&iwdev->ah_tbl_lock);
+		goto err_ah_create;
+	}
 
 exit:
+	spin_unlock(&iwdev->ah_tbl_lock);
 	if (udata) {
 		uresp.ah_id = ah->sc_ah.ah_info.ah_idx;
 		err = ib_copy_to_udata(udata, &uresp, min(sizeof(uresp), udata->outlen));
@@ -1345,17 +1349,10 @@ exit:
 		}
 	}
 
-	spin_unlock(&iwdev->ah_tbl_lock);
 	return 0;
 err_ah_create:
-	ah->parent_ah->refcnt--;
-	if (!ah->parent_ah->refcnt) {
-		/* Last ref dropped, add to deferred delete list. */
-		list_add_tail(&ah->parent_ah->node, &iwdev->ah_deletion_list);
-		iwdev->ah_deletion_list_cnt++;
-		ah->parent_ah->deletion_timestamp = ktime_get_raw_ns();
-	}
-	spin_unlock(&iwdev->ah_tbl_lock);
+	irdma_destroy_ah(ib_ah, 0);
+	return err;
 err_gid_l2:
 	if (ah_id)
 		irdma_free_rsrc(iwdev->rf, iwdev->rf->allocated_ahs, ah_id);
