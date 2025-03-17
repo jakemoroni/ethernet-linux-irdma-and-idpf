@@ -73,9 +73,6 @@ extern u32 wa_mem_pages;
 extern u32 hw_type_wa;
 extern struct auxiliary_driver i40iw_auxiliary_drv;
 
-/* Limit QPNs. */
-#define QPN_LIMIT_WA            262140u
-
 #define IRDMA_FW_VER_DEFAULT	2
 #define IRDMA_HW_VER	        2
 

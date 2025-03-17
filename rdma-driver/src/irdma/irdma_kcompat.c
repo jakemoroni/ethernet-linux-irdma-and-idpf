@@ -1969,7 +1969,7 @@ int irdma_create_qp(struct ib_qp *ibqp,
 	if (init_attr->qp_type == IB_QPT_GSI)
 		qp_num = 1;
 	else
-		err_code = irdma_alloc_rsrc(rf, rf->allocated_qps, QPN_LIMIT_WA,
+		err_code = irdma_alloc_rsrc(rf, rf->allocated_qps, rf->max_qp,
 					    &qp_num, &rf->next_qp);
 	if (err_code)
 		goto error;
