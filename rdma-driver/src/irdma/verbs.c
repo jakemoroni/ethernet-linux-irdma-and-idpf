@@ -3586,7 +3586,7 @@ static int irdma_post_send(struct ib_qp *ibqp,
 			break;
 		case IB_WR_LOCAL_INV:
 			info.op_type = IRDMA_OP_TYPE_INV_STAG;
-			info.local_fence = info.read_fence;
+			info.local_fence = true;
 			info.op.inv_local_stag.target_stag = ib_wr->ex.invalidate_rkey;
 			err = irdma_uk_stag_local_invalidate(ukqp, &info, true);
 			break;
@@ -3614,7 +3614,7 @@ static int irdma_post_send(struct ib_qp *ibqp,
 				stag_info.chunk_size = 1;
 				stag_info.first_pm_pbl_index = palloc->level1.idx;
 			}
-			stag_info.local_fence = ib_wr->send_flags & IB_SEND_FENCE;
+			stag_info.local_fence = true;
 			err = irdma_sc_mr_fast_register(&iwqp->sc_qp, &stag_info,
 							true);
 			break;
