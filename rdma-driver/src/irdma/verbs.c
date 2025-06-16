@@ -591,7 +591,9 @@ int irdma_setup_umode_qp(struct ib_udata *udata,
 		ibdev_dbg(&iwdev->ibdev, "VERBS: ib_copy_from_data fail\n");
 		return ret;
 	}
-
+#ifdef UD_CREDIT_API
+	iwqp->context_ud_credits = &ucontext->ud_credits_held;
+#endif /* UD_CREDIT_API */
 	iwqp->ctx_info.qp_compl_ctx = req.user_compl_ctx;
 	iwqp->user_mode = 1;
 	if (req.user_wqe_bufs) {
@@ -3463,7 +3465,20 @@ static int irdma_post_send(struct ib_qp *ibqp,
 	iwqp = to_iwqp(ibqp);
 	ukqp = &iwqp->sc_qp.qp_uk;
 	dev = &iwqp->iwdev->rf->sc_dev;
-
+#ifdef UD_CREDIT_API
+	if (iwqp->user_mode) {
+		bool got_one = false;
+		/* Try to get a credit. */
+		spin_lock(&iwqp->iwdev->ud_credit_lock);
+		if (iwqp->iwdev->ud_credits) {
+			iwqp->iwdev->ud_credits--;
+			(*iwqp->context_ud_credits)++;
+			got_one = true;
+		}
+		spin_unlock(&iwqp->iwdev->ud_credit_lock);
+		return got_one? 0 : -ENOMEM;
+	}
+#endif /* UD_CREDIT_API */
 	spin_lock_irqsave(&iwqp->lock, flags);
 	while (ib_wr) {
 		memset(&info, 0, sizeof(info));
@@ -3998,6 +4013,20 @@ static int irdma_poll_cq(struct ib_cq *ibcq, int num_entries,
 
 	iwcq = to_iwcq(ibcq);
 
+#ifdef UD_CREDIT_API
+	if (iwcq->user_mode) {
+		spin_lock(&iwcq->iwdev->ud_credit_lock);
+		if (*iwcq->context_ud_credits == 0) {
+			spin_unlock(&iwcq->iwdev->ud_credit_lock);
+			printk(KERN_ERR "UD credit underflow\n");
+			return -1;
+		}
+		(*iwcq->context_ud_credits)--;
+		iwcq->iwdev->ud_credits++;
+		spin_unlock(&iwcq->iwdev->ud_credit_lock);
+		return 0;
+	}
+#endif
 	spin_lock_irqsave(&iwcq->lock, flags);
 	ret = __irdma_poll_cq(iwcq, num_entries, entry);
 	spin_unlock_irqrestore(&iwcq->lock, flags);
@@ -4803,6 +4832,10 @@ static int irdma_init_rdma_device(struct irdma_device *iwdev)
 	if (iwdev->rf->rdma_ver >= IRDMA_GEN_3)
 		irdma_set_device_gen3_ops(&iwdev->ibdev);
 
+#ifdef UD_CREDIT_API
+	iwdev->ibdev.uverbs_cmd_mask |= BIT_ULL(IB_USER_VERBS_CMD_POST_SEND);
+	iwdev->ibdev.uverbs_cmd_mask |= BIT_ULL(IB_USER_VERBS_CMD_POLL_CQ);
+#endif /* UD_CREDIT_API */
 	return 0;
 }
 

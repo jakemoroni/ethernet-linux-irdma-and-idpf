@@ -349,6 +349,9 @@ int irdma_alloc_ucontext(struct ib_ucontext *uctx, struct ib_udata *udata)
 #ifdef CONFIG_DEBUG_FS
 	irdma_dbg_save_ucontext(iwdev, ucontext);
 #endif
+#ifdef UD_CREDIT_API
+	ucontext->ud_credits_held = 0;
+#endif /* UD_CREDIT_API */
 	return 0;
 
 ver_error:
@@ -505,7 +508,16 @@ ver_error:
 void irdma_dealloc_ucontext(struct ib_ucontext *context)
 {
 	struct irdma_ucontext *ucontext = to_ucontext(context);
-
+#ifdef UD_CREDIT_API
+	spin_lock(&ucontext->iwdev->ud_credit_lock);
+	if (ucontext->ud_credits_held) {
+		printk(KERN_ERR "User context was holding %u UD credits upon "
+		       "closure, returning to device\n",
+		       ucontext->ud_credits_held);
+		ucontext->iwdev->ud_credits += ucontext->ud_credits_held;
+	}
+	spin_unlock(&ucontext->iwdev->ud_credit_lock);
+#endif /* UD_CREDIT_API */
 #ifdef RDMA_MMAP_DB_SUPPORT
 	rdma_user_mmap_entry_remove(ucontext->db_mmap_entry);
 #else
@@ -2531,7 +2543,10 @@ struct ib_cq *irdma_create_cq(struct ib_device *ibdev,
 
 		iwcq->user_mode = true;
 		ucontext = kc_get_ucontext(udata);
-
+#ifdef UD_CREDIT_API
+		iwcq->context_ud_credits = &ucontext->ud_credits_held;
+		iwcq->iwdev = iwdev;
+#endif /* UD_CREDIT_API */
 		if (ib_copy_from_udata(&req, udata,
 				       min(sizeof(req), udata->inlen))) {
 			err_code = -EFAULT;

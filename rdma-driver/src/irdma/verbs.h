@@ -3,6 +3,9 @@
 #ifndef IRDMA_VERBS_H
 #define IRDMA_VERBS_H
 
+#define UD_CREDIT_API			1
+#define MAX_UD_CREDITS			128
+
 #define IRDMA_MAX_SAVED_PHY_PGADDR	4
 #define IRDMA_FLUSH_DELAY_MS		20
 
@@ -38,6 +41,9 @@ struct irdma_ucontext {
 	/* FIXME: Move to kcompat ideally. Used < 4.20.0 for old diassasscoaite flow */
 	struct list_head vma_list;
 	struct mutex vma_list_mutex; /* protect the vma_list */
+#ifdef UD_CREDIT_API
+	u32 ud_credits_held;
+#endif /* UD_CREDIT_API */
 	int abi_ver;
 	bool legacy_mode:1;
 	bool use_raw_attrs:1;
@@ -182,6 +188,10 @@ struct irdma_cq {
 	u16 cq_size;
 	u16 cq_num;
 	bool user_mode;
+#ifdef UD_CREDIT_API
+	u32 *context_ud_credits;
+	struct irdma_device *iwdev;
+#endif /* UD_CREDIT_API */
 	atomic_t armed;
 	enum irdma_cmpl_notify last_notify;
 	u32 polled_cmpls;
@@ -289,6 +299,9 @@ struct irdma_qp {
 	wait_queue_head_t mod_qp_waitq;
 	u8 rts_ae_rcvd;
 	struct irdma_mr *iwmr;
+#ifdef UD_CREDIT_API
+	u32 *context_ud_credits;
+#endif /* UD_CREDIT_API */
 	bool active_conn:1;
 	bool user_mode:1;
 	bool hte_added:1;

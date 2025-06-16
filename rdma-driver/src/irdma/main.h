@@ -429,6 +429,10 @@ struct irdma_device {
 #endif
 	u32 ah_list_cnt;
 	u32 ah_list_hwm;
+#ifdef UD_CREDIT_API
+	spinlock_t ud_credit_lock;
+	u32 ud_credits;
+#endif /* UD_CREDIT_API */
 	u32 roce_cwnd;
 	u32 roce_ackcreds;
 	u32 vendor_id;

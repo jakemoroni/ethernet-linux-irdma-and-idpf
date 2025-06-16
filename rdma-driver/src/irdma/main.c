@@ -939,6 +939,10 @@ static int irdma_fill_device_info(struct irdma_device *iwdev, struct iidc_core_d
 	spin_lock_init(&iwdev->ah_tbl_lock);
 	mutex_init(&iwdev->delete_lock);
 	INIT_LIST_HEAD(&iwdev->ah_deletion_list);
+#ifdef UD_CREDIT_API
+	spin_lock_init(&iwdev->ud_credit_lock);
+	iwdev->ud_credits = MAX_UD_CREDITS;
+#endif /* UD_CREDIT_API */
 	iwdev->netdev = cdev_info->netdev;
 	iwdev->vsi_num = cdev_info->vport_id;
 	iwdev->init_state = INITIAL_STATE;
@@ -993,7 +997,7 @@ static int irdma_probe(struct auxiliary_device *aux_dev, const struct auxiliary_
 	int err;
 	struct irdma_handler *hdl;
 
-	printk(KERN_ERR "AH dedup and deferred deletion enabled (v5)\n");
+	printk(KERN_ERR "AH dedup and deferred deletion enabled (v5) and UD credit API\n");
 
 	if (cdev_info->ver.major != IIDC_MAJOR_VER) {
 		pr_err("version mismatch:\n");
