@@ -213,8 +213,10 @@ static void irdma_process_ae_def_cmpl(struct irdma_pci_f *rf,
 /**
  * irdma_process_aeq - handle aeq events
  * @rf: RDMA PCI function
+ *
+ * Return: True if an AE was processed.
  */
-void irdma_process_aeq(struct irdma_pci_f *rf)
+bool irdma_process_aeq(struct irdma_pci_f *rf)
 {
 	struct irdma_sc_dev *dev = &rf->sc_dev;
 	struct irdma_aeq *aeq = &rf->aeq;
@@ -230,11 +232,12 @@ void irdma_process_aeq(struct irdma_pci_f *rf)
 	struct irdma_srq *iwsrq;
 	u64 srq_id;
 	unsigned long flags;
+	bool work_done = false;
 
 	u32 aeqcnt = 0;
 
 	if (!sc_aeq->size)
-		return;
+		return work_done;
 
 	do {
 		memset(info, 0, sizeof(*info));
@@ -246,9 +249,10 @@ void irdma_process_aeq(struct irdma_pci_f *rf)
 			ibdev_err(&iwdev->ibdev, "AEQ has overflowed\n");
 			rf->reset = true;
 			rf->gen_ops.request_reset(rf);
-			return;
+			return work_done;
 		}
 
+		work_done = true;
 		aeqcnt++;
 		atomic_inc(&iwdev->ae_info.ae_cnt);
 
@@ -485,6 +489,8 @@ void irdma_process_aeq(struct irdma_pci_f *rf)
 
 	if (aeqcnt)
 		irdma_sc_repost_aeq_entries(dev, aeqcnt);
+
+	return work_done;
 }
 
 /**
@@ -512,7 +518,11 @@ static irqreturn_t irdma_aeq_ceq0_irq_thread(int irq, void *private)
 		irdma_ena_intr(&rf->sc_dev, rf->iw_msixtbl[0].idx);
 		return IRQ_HANDLED;
 	}
-	irdma_process_aeq(rf);
+
+	/* If there was no AE, then it means there was an interrupt for CEQ0. */
+	if (!irdma_process_aeq(rf))
+		atomic_set(&rf->ceq0_int_good, 1);
+
 	irdma_ena_intr(&rf->sc_dev, rf->iw_msixtbl[0].idx);
 
 	return IRQ_HANDLED;
@@ -2112,6 +2122,13 @@ int irdma_rt_init_hw(struct irdma_device *iwdev,
 			}
 			iwdev->init_state = AEQ_CREATED;
 			rf->rsrc_created = true;
+
+			if (!atomic_read(&rf->ceq0_int_good)) {
+				printk(KERN_ERR
+				       "irdma: No CEQ-0 interrupt detected, "
+				       "falling back to poll mode\n");
+				atomic_set(&rf->ceq0_wa_enable, 1);
+			}
 		}
 
 		if (iwdev->rf->sc_dev.hw_attrs.uk_attrs.hw_rev == IRDMA_GEN_1)

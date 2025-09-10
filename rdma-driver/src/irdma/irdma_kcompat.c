@@ -2521,6 +2521,12 @@ struct ib_cq *irdma_create_cq(struct ib_device *ibdev,
 	info.type = IRDMA_CQ_TYPE_IWARP;
 	info.vsi = &iwdev->vsi;
 
+	/* If the user asked for vector 0 but it is not functional, force to
+	 * CEQ-1.
+	 */
+	if (!info.ceq_id && atomic_read(&rf->ceq0_wa_enable))
+		info.ceq_id = 1;
+
 	if (udata) {
 		struct irdma_ucontext *ucontext;
 		struct irdma_create_cq_req req = {};

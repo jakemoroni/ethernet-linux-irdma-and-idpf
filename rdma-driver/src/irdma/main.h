@@ -394,6 +394,8 @@ struct irdma_pci_f {
 	u8 vlan_parse_en;
 	struct delayed_work dwork_cqp_poll;
 	u32 chk_stag;
+	atomic_t ceq0_int_good;
+	atomic_t ceq0_wa_enable;
 };
 
 struct irdma_ae_info {
@@ -640,7 +642,7 @@ void irdma_del_local_mac_entry(struct irdma_pci_f *rf, u16 idx);
 const char *irdma_get_ae_desc(u16 ae_id);
 
 void irdma_process_ceq(struct irdma_pci_f *rf, struct irdma_ceq *ceq);
-void irdma_process_aeq(struct irdma_pci_f *rf);
+bool irdma_process_aeq(struct irdma_pci_f *rf);
 
 u32 irdma_initialize_hw_rsrc(struct irdma_pci_f *rf);
 void irdma_port_ibevent(struct irdma_device *iwdev);

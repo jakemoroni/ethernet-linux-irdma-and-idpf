@@ -760,6 +760,13 @@ static int poll_thread(void *context)
 				irdma_process_ceq(rf, rf->ceqlist);
 			irdma_process_aeq(rf);
 		}
+
+		if (atomic_read(&rf->ceq0_wa_enable)) {
+			struct irdma_sc_cq *ccq = &rf->ccq.sc_cq;
+			irdma_process_ceq(rf, rf->ceqlist);
+			irdma_cqp_ce_handler(rf, ccq);
+		}
+
 	} while (!kthread_should_stop());
 
 	return 0;
