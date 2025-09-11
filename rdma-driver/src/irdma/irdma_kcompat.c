@@ -2510,6 +2510,7 @@ struct ib_cq *irdma_create_cq(struct ib_device *ibdev,
 	info.dev = dev;
 	ukinfo->cq_size = max(entries, 4);
 	ukinfo->cq_id = cq_num;
+	iwcq->cq_num = cq_num;
 	cqe_64byte_ena = (dev->hw_attrs.uk_attrs.feature_flags & IRDMA_FEATURE_64_BYTE_CQE) ? true : false;
 	ukinfo->avoid_mem_cflct = cqe_64byte_ena;
 	iwcq->ibcq.cqe = info.cq_uk_init_info.cq_size;
@@ -2672,7 +2673,7 @@ struct ib_cq *irdma_create_cq(struct ib_device *ibdev,
 	if (dev->hw_wa & CCQ_CQ3_POLL && !udata && cq_num == 3)
 		rf->cq_id_3 = iwcq;
 
-	rf->cq_table[cq_num] = iwcq;
+	WRITE_ONCE(rf->cq_table[cq_num], iwcq);
 	init_completion(&iwcq->free_cq);
 
 #if defined(CREATE_CQ_VER_3) || defined(CREATE_CQ_VER_4)

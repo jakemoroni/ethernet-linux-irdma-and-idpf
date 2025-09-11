@@ -819,6 +819,7 @@ struct irdma_sc_dev {
 	int (*ws_add)(struct irdma_sc_vsi *vsi, u8 user_pri);
 	void (*ws_remove)(struct irdma_sc_vsi *vsi, u8 user_pri);
 	void (*ws_reset)(struct irdma_sc_vsi *vsi);
+	void **cq_table;
 };
 
 struct irdma_modify_cq_info {
