@@ -112,15 +112,33 @@ void irdma_process_ceq(struct irdma_pci_f *rf, struct irdma_ceq *ceq)
 	struct irdma_sc_dev *dev = &rf->sc_dev;
 	struct irdma_sc_ceq *sc_ceq;
 	struct irdma_sc_cq *cq;
+	void *temp_cq;
 	unsigned long flags;
 
 	sc_ceq = &ceq->sc_ceq;
 	do {
 		spin_lock_irqsave(&ceq->ce_lock, flags);
-		cq = irdma_sc_process_ceq(dev, sc_ceq);
-		if (!cq) {
+		temp_cq = irdma_sc_process_ceq(dev, sc_ceq);
+		if (!temp_cq) {
 			spin_unlock_irqrestore(&ceq->ce_lock, flags);
 			break;
+		}
+
+		if (rf->sc_dev.hw_attrs.uk_attrs.hw_rev == IRDMA_GEN_3) {
+			/* The first entry in the LUT is an irdma_sc_cq for CQ0,
+			 * so check for it directly. All other values are of
+			 * type irdma_cq.
+			 */
+			if (temp_cq == &rf->ccq.sc_cq) {
+				cq = &rf->ccq.sc_cq;
+			} else {
+				struct irdma_cq *icq = temp_cq;
+				cq = &icq->sc_cq;
+			}
+			/* GEN3 irdma_sc_process_ceq doesn't ack. */
+			writel(cq->cq_uk.cq_id, cq->cq_uk.cq_ack_db);
+		} else {
+			cq = temp_cq;
 		}
 
 		if (cq->cq_type == IRDMA_CQ_TYPE_IWARP)
@@ -2243,6 +2261,11 @@ static void irdma_set_hw_rsrc(struct irdma_pci_f *rf)
 	rf->qp_table = (struct irdma_qp **)
 		(&rf->allocated_arps[BITS_TO_LONGS(rf->arp_table_size)]);
 	rf->cq_table = (struct irdma_cq **)(&rf->qp_table[rf->max_qp]);
+
+	/* ctrl.c needs CQ table. Store fixed CQ0 entry in the first slot. */
+	rf->sc_dev.cq_table = (void **)rf->cq_table;
+	rf->sc_dev.cq_table[0] = &rf->ccq.sc_cq;
+
 	rf->srq_table = (struct irdma_srq **)(&rf->cq_table[rf->max_cq]);
 
 	spin_lock_init(&rf->rsrc_lock);

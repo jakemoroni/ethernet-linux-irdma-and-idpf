@@ -1158,7 +1158,7 @@ void irdma_cq_rem_ref(struct ib_cq *ibcq)
 		return;
 	}
 
-	rf->cq_table[iwcq->cq_num] = NULL;
+	smp_store_mb(rf->cq_table[iwcq->cq_num], NULL);
 	spin_unlock_irqrestore(&rf->cqtable_lock, flags);
 	complete(&iwcq->free_cq);
 }
