@@ -723,15 +723,19 @@ static void ah_age_out(struct irdma_device *iwdev)
 	spin_unlock(&iwdev->ah_tbl_lock);
 }
 
+#define LOW_FREQ_MICROS  1000
+#define HIGH_FREQ_MICROS 25
+
 static int poll_thread(void *context)
 {
 	struct irdma_pci_f *rf = context;
+	u32 sleep_micros = LOW_FREQ_MICROS;
 
 	msleep(200);
 
 	rf->sc_dev.last_cqp_poll_ts = ktime_get_raw_ns();
 	do {
-		msleep(1);
+		usleep_range(sleep_micros, sleep_micros);
 
 		ah_age_out(rf->iwdev);
 
@@ -763,6 +767,17 @@ static int poll_thread(void *context)
 
 		if (atomic_read(&rf->ceq0_wa_enable)) {
 			struct irdma_sc_cq *ccq = &rf->ccq.sc_cq;
+
+			/* If there is a backlog, poll faster. The high freq
+			 * delay is just enough to allow the user to react to a
+			 * completed request and issue another.
+			 */
+			if (READ_ONCE(rf->sc_dev.cqp->requested_ops) !=
+			    atomic64_read(&rf->sc_dev.cqp->completed_ops))
+				sleep_micros = HIGH_FREQ_MICROS;
+			else
+				sleep_micros = LOW_FREQ_MICROS;
+
 			irdma_process_ceq(rf, rf->ceqlist);
 			irdma_cqp_ce_handler(rf, ccq);
 		}
@@ -1000,7 +1015,7 @@ static int irdma_probe(struct auxiliary_device *aux_dev, const struct auxiliary_
 	int err;
 	struct irdma_handler *hdl;
 
-	printk(KERN_ERR "AH dedup and deferred deletion enabled (v6)\n");
+	printk(KERN_ERR "AH dedup and deferred deletion enabled (v7)\n");
 
 	if (cdev_info->ver.major != IIDC_MAJOR_VER) {
 		pr_err("version mismatch:\n");
