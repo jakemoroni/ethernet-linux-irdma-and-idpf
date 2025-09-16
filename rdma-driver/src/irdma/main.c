@@ -1015,7 +1015,7 @@ static int irdma_probe(struct auxiliary_device *aux_dev, const struct auxiliary_
 	int err;
 	struct irdma_handler *hdl;
 
-	printk(KERN_ERR "AH dedup and deferred deletion enabled (v7)\n");
+	printk(KERN_ERR "AH dedup and deferred deletion enabled (v8)\n");
 
 	if (cdev_info->ver.major != IIDC_MAJOR_VER) {
 		pr_err("version mismatch:\n");
