@@ -893,6 +893,7 @@ struct idpf_queue {
 
 	u16 idx;
 	void __iomem *tail;
+	u16 last_re;		/* index of last RE requested */
 	u16 q_type;
 	u32 q_id;
 	u16 desc_count;
