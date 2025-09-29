@@ -9,6 +9,10 @@
 #include "idpf.h"
 #include "idpf_lan_txrx.h"
 
+static int min_bql_compl = 16;
+module_param(min_bql_compl, int, 0644);
+MODULE_PARM_DESC(min_bql_compl, "Restart netdev when dev is paused and compl is less than threshold");
+
 /**
  * idpf_buf_lifo_push - push a buffer pointer onto stack
  * @stack: pointer to stack struct
@@ -2389,6 +2393,35 @@ idpf_tx_handle_reinject_completion(struct idpf_queue *txq,
 	 */
 }
 
+/* We cannot block if there are too few pending completions,
+ * or the queue could stall forever.
+ *
+ * netdev_tx_completed()
+ * should look like this but TOO_FEW_PENDING_COMPL() is missing.
+ * We can remedy adding the missing check and action at the end.
+ *
+ * dql_completed(bytes); smp_mb();
+ * if (! (bql_avail() >= 0 || TOO_FEW_PENDING_COMPL())) ) return;
+ * if (test_and_clear(STACK_XOFF)) netif_schedule_queue()
+ *
+ * netdev_tx_sent_queue() should look like this but
+ * TOO_FEW_PENDING_COMPL() is missing. The first one is only causing
+ * unnecessary settings of STACK_XOFF, we can remedy adding the
+ * missing check at the end.
+ *
+ * dql_queued(bytes);
+ * if (bql_avail() >= 0 || TOO_FEW_PENDING_COMPL()) return;
+ * write_jiffies(); smp_mb_before_atomic();
+ * set_bit(STACK_XOFF); smp_mb()
+ * if (bql_avail() >= 0 || TOO_FEW_PENDING_COMPL()) clear_bit(STACK_XOFF)
+ */
+static bool idpf_complq_maybe_restart(struct idpf_queue *complq, struct netdev_queue *nq) {
+	if (IDPF_TX_COMPLQ_PENDING(complq) < READ_ONCE(min_bql_compl) &&
+	    test_and_clear_bit(__QUEUE_STATE_STACK_XOFF, &nq->state))
+		return true;
+	return false;
+}
+
 /**
  * idpf_tx_clean_complq - Reclaim resources on completion queue
  * @complq: Tx ring to clean
@@ -2548,6 +2581,8 @@ fetch_next_desc:
 		/* Update BQL */
 		nq = netdev_get_tx_queue(tx_q->vport->netdev, tx_q->idx);
 		netdev_tx_completed_queue(nq, tx_q->cleaned_pkts, tx_q->cleaned_bytes);
+		if (idpf_complq_maybe_restart(complq, nq))
+			netif_schedule_queue(nq);
 
 		/* Reset cleaned stats for the next time this queue is cleaned */
 		tx_q->cleaned_bytes = 0;
@@ -3144,6 +3179,7 @@ static void idpf_tx_splitq_map(struct idpf_queue *tx_q,
 	/* record bytecount for BQL */
 	nq = netdev_get_tx_queue(tx_q->vport->netdev, tx_q->idx);
 	netdev_tx_sent_queue(nq, first->bytecount);
+	idpf_complq_maybe_restart(tx_q->tx.complq, nq);
 
 	idpf_tx_buf_hw_update(tx_q, i, netdev_xmit_more());
 }
