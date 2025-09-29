@@ -2656,6 +2656,19 @@ void idpf_tx_splitq_build_flow_desc(union idpf_tx_flex_desc *desc,
 	desc->flow.qw1.ts[2] = params->offload.desc_ts[2];
 }
 
+/* Global conditions to tell whether the txq (and related resources)
+ * has room to allow the use of "size" descriptors.
+ */
+static bool txq_has_room(struct idpf_queue *tx_q, unsigned int size)
+{
+	if (IDPF_DESC_UNUSED(tx_q) < size ||
+	    IDPF_TX_COMPLQ_PENDING(tx_q->tx.complq) >
+		IDPF_TX_COMPLQ_OVERFLOW_THRESH(tx_q->tx.complq) ||
+		IDPF_TX_BUF_RSV_LOW(tx_q))
+		return false;
+	return true;
+}
+
 /**
  * __idpf_tx_maybe_stop_common - 2nd level check for common Tx stop conditions
  * @tx_q: the queue to be checked
@@ -2672,7 +2685,7 @@ static int __idpf_tx_maybe_stop_common(struct idpf_queue *tx_q,
 	smp_mb();
 
 	/* Check again in a case another CPU has just made room available. */
-	if (likely(IDPF_DESC_UNUSED(tx_q) < size))
+	if (likely(!txq_has_room(tx_q, size)))
 		return -EBUSY;
 
 	/* A reprieve! - use start_subqueue because it doesn't call schedule */
@@ -2690,7 +2703,7 @@ static int __idpf_tx_maybe_stop_common(struct idpf_queue *tx_q,
  */
 int idpf_tx_maybe_stop_common(struct idpf_queue *tx_q, unsigned int size)
 {
-	if (likely(IDPF_DESC_UNUSED(tx_q) >= size))
+	if (likely(txq_has_room(tx_q, size)))
 		return 0;
 
 	u64_stats_update_begin(&tx_q->stats_sync);
@@ -2713,29 +2726,7 @@ static int idpf_tx_maybe_stop_splitq(struct idpf_queue *tx_q,
 	if (idpf_tx_maybe_stop_common(tx_q, descs_needed))
 		return -EBUSY;
 
-	/* If there are too many outstanding completions expected on the
-	 * completion queue, stop the TX queue to give the device some time to
-	 * catch up
-	 */
-	if (unlikely(IDPF_TX_COMPLQ_PENDING(tx_q->tx.complq) >
-		     IDPF_TX_COMPLQ_OVERFLOW_THRESH(tx_q->tx.complq)))
-		goto splitq_stop;
-
-	/* Also check for available book keeping buffers; if we are low, stop
-	 * the queue to wait for more completions
-	 */
-	if (unlikely(IDPF_TX_BUF_RSV_LOW(tx_q)))
-		goto splitq_stop;
-
 	return 0;
-
-splitq_stop:
-	u64_stats_update_begin(&tx_q->stats_sync);
-	u64_stats_inc(&tx_q->q_stats.tx.q_busy);
-	u64_stats_update_end(&tx_q->stats_sync);
-	netif_stop_subqueue(tx_q->vport->netdev, tx_q->idx);
-
-	return -EBUSY;
 }
 
 /**
