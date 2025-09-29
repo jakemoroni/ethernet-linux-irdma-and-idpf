@@ -13,6 +13,14 @@ static int min_bql_compl = 16;
 module_param(min_bql_compl, int, 0644);
 MODULE_PARM_DESC(min_bql_compl, "Restart netdev when dev is paused and compl is less than threshold");
 
+static bool no_stash = true;
+module_param(no_stash, bool, 0644);
+MODULE_PARM_DESC(no_stash, "Do not use the stash for out of order completions");
+
+static int tx_buf_pool_size = 32767;
+module_param(tx_buf_pool_size, int, 0644);
+MODULE_PARM_DESC(tx_buf_pool_size, "Configurable Tx pool size, min 256 max 64K");
+
 /**
  * idpf_buf_lifo_push - push a buffer pointer onto stack
  * @stack: pointer to stack struct
@@ -136,7 +144,7 @@ static void idpf_tx_buf_rel_all(struct idpf_queue *txq)
 		return;
 
 	/* Free all the Tx buffer sk_buffs */
-	for (i = 0; i < txq->desc_count; i++)
+	for (i = 0; i < txq->buf_pool_size; i++)
 		idpf_tx_buf_rel(txq, &txq->tx.bufs[i]);
 
 	kfree(txq->tx.bufs);
@@ -228,10 +236,35 @@ static int idpf_tx_buf_alloc_all(struct idpf_queue *tx_q)
 	/* Allocate book keeping buffers only. Buffers to be supplied to HW
 	 * are allocated by kernel network stack and received as part of skb
 	 */
-	buf_size = sizeof(struct idpf_tx_buf) * tx_q->desc_count;
+	tx_q->buf_pool_size = tx_q->desc_count;
+	tx_q->no_stash = READ_ONCE(no_stash);
+#ifdef HAVE_XDP_SUPPORT
+	if (tx_q->no_stash) {
+		/* no_stash not supported for xdp */
+		if (idpf_xdp_is_prog_ena(tx_q->vport) &&
+		    (tx_q->idx >= tx_q->vport->xdp_txq_offset))
+			tx_q->no_stash = false;
+	}
+#endif
+	if (tx_q->no_stash) {
+		i = READ_ONCE(tx_buf_pool_size);
+		tx_q->buf_pool_size = max_t(u16, 256, min_t(u16, i, 32767));
+	}
+	dev_dbg(tx_q->dev, "queue %d stash %d bufs %d\n",
+		tx_q->idx, tx_q->no_stash, tx_q->buf_pool_size);
+
+	buf_size = sizeof(struct idpf_tx_buf) * tx_q->buf_pool_size;
 	tx_q->tx.bufs = kzalloc(buf_size, GFP_KERNEL);
 	if (!tx_q->tx.bufs)
 		return -ENOMEM;
+
+	spin_lock_init(&tx_q->buflist_lock);
+	tx_q->bufs_available = tx_q->buf_pool_size;
+	tx_q->softirq_bufs = TXBUF_NULL;
+	tx_q->xmit_bufs = 0;
+	for (i = 0; i < tx_q->buf_pool_size - 1; i++)
+		tx_q->tx.bufs[i].next_buf = i + 1;
+	tx_q->tx.bufs[i].next_buf = TXBUF_NULL;
 
 	/* Initialize tx buf stack for out-of-order completions if
 	 * flow scheduling offload is enabled
@@ -1993,6 +2026,11 @@ idpf_tx_splitq_clean(struct idpf_queue *tx_q, u16 end, int napi_budget,
 	struct idpf_tx_buf *tx_buf;
 	bool clean_complete = true;
 
+	if (tx_q->no_stash) {
+		tx_q->next_to_clean = end;
+		return true;
+	}
+
 	tx_desc = IDPF_FLEX_TX_DESC(tx_q, ntc);
 	next_pending_desc = IDPF_FLEX_TX_DESC(tx_q, end);
 	tx_buf = &tx_q->tx.bufs[ntc];
@@ -2066,6 +2104,13 @@ do {							\
 	}						\
 } while (0)
 
+static void idpf_maybe_dma_unmap_page(struct idpf_queue *tx_q,
+				      struct idpf_tx_buf *tx_buf)
+{
+	dma_unmap_page(tx_q->dev, dma_unmap_addr(tx_buf, dma),
+		       dma_unmap_len(tx_buf, len), DMA_TO_DEVICE);
+}
+
 /**
  * idpf_tx_clean_buf_ring - clean flow scheduling TX queue buffers
  * @txq: queue to clean
@@ -2091,9 +2136,9 @@ static bool idpf_tx_clean_buf_ring(struct idpf_queue *txq, u16 compl_tag,
 	struct idpf_tx_buf *tx_buf;
 	u16 i;
 
-	tx_buf = &txq->tx.bufs[idx];
+	tx_buf = txq->no_stash ? &txq->tx.bufs[compl_tag] : &txq->tx.bufs[idx];
 
-	if (unlikely(tx_buf->compl_tag != compl_tag))
+	if (unlikely(!txq->no_stash && tx_buf->compl_tag != compl_tag))
 		return false;
 
 	switch (tx_buf->type) {
@@ -2129,6 +2174,30 @@ skip_tx_tstamp:
 		break;
 	default:
 		return false;
+	}
+
+	if (txq->no_stash) {
+		u16 freed_buf = 1;
+		/* First buffer was already cleaned up, process others. */
+		while (tx_buf->next_buf != TXBUF_NULL) {
+			freed_buf++;
+			tx_buf = &txq->tx.bufs[tx_buf->next_buf];
+			if (tx_buf->type == IDPF_TX_BUF_FRAG) {
+				if (dma_unmap_len(tx_buf, len))
+					idpf_maybe_dma_unmap_page(txq, tx_buf);
+				dma_unmap_len_set(tx_buf, len, 0);
+			}
+			tx_buf->type = IDPF_TX_BUF_EMPTY;
+		}
+
+		/* Prepend compl_tag to the softirq freelist */
+		spin_lock(&txq->buflist_lock);
+		tx_buf->next_buf = txq->softirq_bufs;
+		txq->softirq_bufs = compl_tag;
+		txq->bufs_available += freed_buf;
+		BUG_ON(txq->bufs_available > txq->buf_pool_size);
+		spin_unlock(&txq->buflist_lock);
+		return true; /* No bump next_to_clean */
 	}
 
 	while (idx != eop_idx) {
@@ -2302,9 +2371,9 @@ idpf_tx_handle_rs_completion(struct idpf_queue *txq,
 	if (unlikely(test_bit(__IDPF_Q_MISS_TAG_EN, txq->flags) &&
 		     compl_tag & IDPF_TX_SPLITQ_MISS_COMPL_TAG)) {
 		compl_tag &= ~IDPF_TX_SPLITQ_MISS_COMPL_TAG;
-
-		return idpf_tx_handle_miss_completion(txq, desc, cleaned,
-						      compl_tag, budget);
+		if (!txq->no_stash)
+			return idpf_tx_handle_miss_completion(txq, desc, cleaned,
+							      compl_tag, budget);
 	}
 #ifdef HAVE_XDP_SUPPORT
 #ifdef HAVE_NETDEV_BPF_XSK_POOL
@@ -2488,6 +2557,7 @@ static bool idpf_tx_clean_complq(struct idpf_queue *complq, int budget,
 					     IDPF_TXD_COMPLT_RE);
 			break;
 		case IDPF_TXD_COMPLT_RS:
+handle_rs_completion:
 			idpf_tx_handle_rs_completion(tx_q, tx_desc,
 						     &cleaned_stats, budget);
 			break;
@@ -2495,6 +2565,9 @@ static bool idpf_tx_clean_complq(struct idpf_queue *complq, int budget,
 			idpf_tx_handle_sw_marker(tx_q);
 			break;
 		case IDPF_TXD_COMPLT_RULE_MISS:
+			if (tx_q->no_stash)
+				goto handle_rs_completion;
+
 			compl_tag =
 				le16_to_cpu(tx_desc->q_head_compl_tag.compl_tag);
 
@@ -2503,6 +2576,9 @@ static bool idpf_tx_clean_complq(struct idpf_queue *complq, int budget,
 						       compl_tag, budget);
 			break;
 		case IDPF_TXD_COMPLT_REINJECTED:
+			if (tx_q->no_stash)
+				goto fetch_next_desc;
+
 			idpf_tx_handle_reinject_completion(tx_q, tx_desc,
 							   &cleaned_stats,
 							   budget);
@@ -2591,7 +2667,7 @@ fetch_next_desc:
 		/* Check if the TXQ needs to and can be restarted */
 		if (unlikely(netif_tx_queue_stopped(nq) && complq_ok &&
 			     netif_carrier_ok(tx_q->vport->netdev) &&
-			     !IDPF_TX_BUF_RSV_LOW(tx_q) &&
+			     (tx_q->no_stash || !IDPF_TX_BUF_RSV_LOW(tx_q)) &&
 			     (IDPF_DESC_UNUSED(tx_q) >= IDPF_TX_WAKE_THRESH))) {
 			/* Make sure any other threads stopping queue after
 			 * this see new next_to_clean.
@@ -2662,9 +2738,10 @@ void idpf_tx_splitq_build_flow_desc(union idpf_tx_flex_desc *desc,
 static bool txq_has_room(struct idpf_queue *tx_q, unsigned int size)
 {
 	if (IDPF_DESC_UNUSED(tx_q) < size ||
+	    tx_q->bufs_available < size ||
 	    IDPF_TX_COMPLQ_PENDING(tx_q->tx.complq) >
 		IDPF_TX_COMPLQ_OVERFLOW_THRESH(tx_q->tx.complq) ||
-		IDPF_TX_BUF_RSV_LOW(tx_q))
+	    (!tx_q->no_stash && IDPF_TX_BUF_RSV_LOW(tx_q)))
 		return false;
 	return true;
 }
@@ -3008,6 +3085,8 @@ static void idpf_tx_splitq_map(struct idpf_queue *tx_q,
 	skb_frag_t *frag;
 	u16 td_cmd = 0;
 	dma_addr_t dma;
+	int buf_used = 0;
+	struct idpf_tx_buf *new_tx_buf = first;		/* used in no_stash */
 
 	skb = first->skb;
 
@@ -3022,17 +3101,28 @@ static void idpf_tx_splitq_map(struct idpf_queue *tx_q,
 
 	tx_buf = first;
 
+	if (tx_q->no_stash) {
+		params->compl_tag = first - tx_q->tx.bufs;
+		goto scan_skb;
+	}
+
 	params->compl_tag =
 		(tx_q->compl_tag_cur_gen << tx_q->compl_tag_gen_s) | i;
 
+scan_skb:
 	for (frag = &skb_shinfo(skb)->frags[0];; frag++) {
 		unsigned int max_data = IDPF_TX_MAX_DESC_DATA_ALIGNED;
 
 		if (dma_mapping_error(tx_q->dev, dma))
 			return idpf_tx_dma_map_error(tx_q, skb, first, i);
 
+		if (tx_q->no_stash) {	/* recover the correct value */
+			tx_buf = new_tx_buf;
+			buf_used++;
+		}
 		first->nr_frags++;
-		tx_buf->compl_tag = params->compl_tag;
+		if (!tx_q->no_stash)
+			tx_buf->compl_tag = params->compl_tag;
 		tx_buf->type = IDPF_TX_BUF_FRAG;
 
 		/* record length, and DMA address */
@@ -3108,7 +3198,8 @@ static void idpf_tx_splitq_map(struct idpf_queue *tx_q,
 			 * simply pass over these holes and finish cleaning the
 			 * rest of the packet.
 			 */
-			tx_buf->type = IDPF_TX_BUF_EMPTY;
+			if (!tx_q->no_stash)	/* not used in new mode */
+				tx_buf->type = IDPF_TX_BUF_EMPTY;
 
 			/* Adjust the DMA offset and the remaining size of the
 			 * fragment.  On the first iteration of this loop,
@@ -3143,6 +3234,11 @@ static void idpf_tx_splitq_map(struct idpf_queue *tx_q,
 			tx_desc++;
 		}
 
+		if (tx_q->no_stash) {	/* prepare for next round */
+			idpf_grab_softirq_bufs(tx_q, &new_tx_buf->next_buf);
+			new_tx_buf = &tx_q->tx.bufs[new_tx_buf->next_buf];
+		}
+
 		size = skb_frag_size(frag);
 		data_len -= size;
 
@@ -3162,6 +3258,16 @@ static void idpf_tx_splitq_map(struct idpf_queue *tx_q,
 	td_cmd |= params->eop_cmd;
 	idpf_tx_splitq_build_desc(tx_desc, params, td_cmd, size);
 	i = idpf_tx_splitq_bump_ntu(tx_q, i);
+
+	if (tx_q->no_stash) {
+		/* Return unused buffers to the txq_freelist */
+		tx_q->xmit_bufs = new_tx_buf->next_buf;
+		new_tx_buf->next_buf = TXBUF_NULL;
+		spin_lock(&tx_q->buflist_lock);
+		tx_q->bufs_available -= buf_used;
+		BUG_ON(tx_q->bufs_available < 0);
+		spin_unlock(&tx_q->buflist_lock);
+	}
 
 	/* Update complq on how many completions to expect. */
 	complq = tx_q->tx.complq;
@@ -3379,7 +3485,8 @@ idpf_tx_splitq_get_ctx_desc(struct idpf_queue *txq)
 	union idpf_flex_tx_ctx_desc *desc;
 	int i = txq->next_to_use;
 
-	txq->tx.bufs[i].type = IDPF_TX_BUF_RSVD;
+	if (!txq->no_stash)
+		txq->tx.bufs[i].type = IDPF_TX_BUF_RSVD;
 
 	/* grab the next descriptor */
 	desc = IDPF_FLEX_TX_CTX_DESC(txq, i);
@@ -3526,6 +3633,11 @@ static netdev_tx_t idpf_tx_splitq_frame(struct sk_buff *skb,
 	}
 	/* record the location of the first descriptor for this packet */
 	first = &tx_q->tx.bufs[tx_q->next_to_use];
+	if (tx_q->no_stash) {
+		/* Grab entries from the softirq_bufs, we know there are enough */
+		idpf_grab_softirq_bufs(tx_q, &tx_q->xmit_bufs);
+		first = &tx_q->tx.bufs[tx_q->xmit_bufs];
+	}
 	first->skb = skb;
 
 	if (tso) {

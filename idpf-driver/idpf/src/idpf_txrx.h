@@ -278,7 +278,11 @@ struct idpf_tx_buf {
 	u16 nr_frags:8;
 
 	u16 type:8;
-	u16 compl_tag;
+#define TXBUF_NULL	U16_MAX		/* no next buffer */
+	union {
+		u16 compl_tag;	/* only used with stash */
+		u16 next_buf;	/* index of next entry in list */
+	};
 	DEFINE_DMA_UNMAP_LEN(len);
 	DEFINE_DMA_UNMAP_ADDR(dma);
 };
@@ -893,6 +897,19 @@ struct idpf_queue {
 
 	u16 idx;
 	void __iomem *tail;
+	/* New bufs handling. Lists use the index instead of pointers.
+	 * The lock protects softirq_bufs and counter, that counts
+	 * bufs in softirq_bufs and xmit_bufs.
+	 * ndo_xmit grabs from xmit_bufs (moving entries from softirq_bufs
+	 * when empty), and softirq return bufs in softirq_bufs.
+	 */
+	spinlock_t buflist_lock;
+	s32 bufs_available;	/* total free idpf_tx_buf in the two lists. */
+	u16 softirq_bufs;	/* idpf_tx_buf feeed by softirq */
+	u16 xmit_bufs;		/* idpf_tx_buf used in ndo_xmit */
+	u16 buf_pool_size;	/* total number of idpf_tx_buf */
+	bool no_stash;		/* don't use stash for out-of-order completions */
+
 	u16 last_re;		/* index of last RE requested */
 	u16 q_type;
 	u32 q_id;
@@ -1023,6 +1040,17 @@ static inline __le64 idpf_tx_singleq_build_ctob(u64 td_cmd, u64 td_offset,
 			   (td_offset << IDPF_TXD_QW1_OFFSET_S) |
 			   ((u64)size << IDPF_TXD_QW1_TX_BUF_SZ_S) |
 			   (td_tag << IDPF_TXD_QW1_L2TAG1_S));
+}
+
+/* Collect the softirq_bufs list into *next_buf. Used in the transmit path. */
+static inline void idpf_grab_softirq_bufs(struct idpf_queue *q, u16 *next_buf)
+{
+	if (*next_buf != TXBUF_NULL)
+		return;
+	spin_lock(&q->buflist_lock);
+	*next_buf = q->softirq_bufs;
+	q->softirq_bufs = TXBUF_NULL;
+	spin_unlock(&q->buflist_lock);
 }
 
 void idpf_tx_splitq_build_ctb(union idpf_tx_flex_desc *desc,
