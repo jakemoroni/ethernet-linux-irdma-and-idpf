@@ -925,10 +925,19 @@ static int irdma_fill_device_info(struct irdma_device *iwdev, struct iidc_core_d
 		rf->gen_ops.register_qset = irdma_lan_register_qset;
 		rf->gen_ops.unregister_qset = irdma_lan_unregister_qset;
 	}
+	#define IRDMA_MEV_B0_RDMA_KEY	0xb
+
+	if (cdev_info->pdev->revision != MEV_PCI_VER_C1) {
+		printk(KERN_ERR "Using MMG workarounds\n");
+		rdma_key = IRDMA_MEV_B0_RDMA_KEY;
+		hw_type_wa = MMG_DEV_00;
+	} else {
+		printk(KERN_ERR "Not using MMG workarounds\n");
+	}
+
 
 	if (rf->rdma_ver >= IRDMA_GEN_3) {
 		if (cdev_info->pdev->revision < MEV_PCI_VER_C0) {
-#define IRDMA_MEV_B0_RDMA_KEY	0xb
 			if (rdma_key != IRDMA_MEV_B0_RDMA_KEY) {
 				dev_err(rf->hw.device,
 					"IRDMA: Invalid RDMA key used for B0\n");

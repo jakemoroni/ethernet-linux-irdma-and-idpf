@@ -64,6 +64,7 @@ extern bool irdma_upload_context;
 #define MEV_PCI_VER_A0	0
 #define MEV_PCI_VER_B0	16
 #define MEV_PCI_VER_C0	32
+#define MEV_PCI_VER_C1  33
 
 extern bool irdma_rca_ena;
 extern bool irdma_rca_rq_post;
